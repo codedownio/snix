@@ -5326,6 +5326,7 @@ dependencies = [
  "futures",
  "mimalloc",
  "nix-compat",
+ "petgraph 0.6.5",
  "prost",
  "serde",
  "serde_json",

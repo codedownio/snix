@@ -17,8 +17,10 @@ use snix_cli::shutdown_signal;
 use snix_store::decompression::DecompressedReader;
 use snix_store::nar::NarCalculationService;
 use snix_store::utils::ServiceUrls;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+use tokio::sync::{Mutex, Notify};
 use tonic::transport::Server;
 use tracing::{Instrument, Span, debug, info, info_span, warn};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
@@ -40,6 +42,9 @@ use mimalloc::MiMalloc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
+
+mod topo_sort;
+use topo_sort::topologically_sorted;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -513,6 +518,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // We need another one, as they are used inside various async closures.
             let copy_paths_span2 = copy_paths_span.clone();
 
+            // To track PathInfos that have already been published
+            let published = Mutex::new(HashSet::<[u8; 20]>::new());
+            // To notify waiters that their dependencies have been published
+            let progress = Notify::new();
+
             let mut source = snix_cli::reader_for_path(reference_graph_path).await?;
 
             // Create a stream producing io::Result<PathMetadata>.
@@ -534,8 +544,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                     copy_paths_span2.pb_set_length(reference_graph.len() as u64);
 
-                    for path_metadata in reference_graph {
-                        yield path_metadata;
+                    let ordered = topologically_sorted(
+                        reference_graph,
+                        |p| *p.path.digest(),
+                        |p| p.references.iter().map(|r| *r.digest()).collect(),
+                    );
+                    for pm in ordered {
+                        yield pm;
                     }
                 }
             };
@@ -570,6 +585,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 .is_some()
                             {
                                 debug!(path_into.store_path=%store_path, "skipped, already exists");
+                                published.lock().await.insert(*store_path.digest());
+                                progress.notify_waiters();
                                 return Ok(());
                             }
 
@@ -583,6 +600,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             .instrument(span.clone())
                             .await
                             .map_err(std::io::Error::other)?;
+
+                            let self_digest = *store_path.digest();
+                            let ref_digests: Vec<[u8; 20]> = references
+                                .iter()
+                                .map(|r| *r.digest())
+                                .filter(|d| *d != self_digest)
+                                .collect();
+                            wait_for_published(&ref_digests, &published, &progress).await;
 
                             // Insert into PathInfoService.
                             let path_info = PathInfo {
@@ -602,6 +627,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 .map_err(std::io::Error::other)?;
 
                             info!("uploaded path");
+                            published.lock().await.insert(self_digest);
+                            progress.notify_waiters();
 
                             Ok::<_, std::io::Error>(())
                         }
@@ -717,5 +744,29 @@ fn parse_uid_gid(s: &str) -> Result<(u32, u32), &'static str> {
             Ok((uid, gid))
         }
         None => Err("no delimiter found"),
+    }
+}
+
+/// Wait until every digest in `refs` is present in `published`, parking on `notify`.
+/// Callers must `notify_waiters()` after each insert into `published`.
+async fn wait_for_published(
+    refs: &[[u8; 20]],
+    published: &Mutex<HashSet<[u8; 20]>>,
+    notify: &Notify,
+) {
+    loop {
+        // Arm the wait before checking, so a publish between the check and the await isn't lost.
+        let notified = notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        let done = {
+            let p = published.lock().await;
+            refs.iter().all(|d| p.contains(d))
+        };
+        if done {
+            return;
+        }
+        notified.await;
     }
 }
