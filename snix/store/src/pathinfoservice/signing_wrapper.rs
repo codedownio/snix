@@ -14,18 +14,17 @@ use nix_compat::narinfo::{Signature, SigningKey, parse_keypair};
 use nix_compat::nixbase32;
 use tracing::instrument;
 
-/// PathInfoService that wraps around an inner [PathInfoService] and when put is called it extracts
-/// the underlying narinfo and signs it using a [SigningKey]. For the moment only the
-/// [ed25519::signature::Signer<ed25519::Signature>] is available using a keyfile (see
-/// [KeyFileSigningPathInfoServiceConfig] for more informations). However the implementation is
-/// generic (see [nix_compat::narinfo::SigningKey] documentation).
+/// PathInfoService signing [PathInfo] inserted into it before inserting into
+/// the inner [PathInfoService].
 ///
-/// The [PathInfo] with the added signature is then put into the inner [PathInfoService].
+/// The implementation itself is generic generic (see [nix_compat::narinfo::SigningKey]),
+/// but we currently only have [KeyFileSigningPathInfoServiceConfig] to
+/// construct with, using a keyfile to sign with.
 pub struct SigningPathInfoService<T, S> {
     instance_name: String,
-    /// The inner [PathInfoService]
+    /// The inner [PathInfoService].
     inner: T,
-    /// The key to sign narinfos
+    /// The key to sign narinfos. Generic over the signer.
     signing_key: SigningKey<S>,
 }
 
@@ -87,14 +86,17 @@ pub enum Error {
     Inner(#[from] pathinfoservice::Error),
 }
 
-/// [ServiceBuilder] implementation that builds a [SigningPathInfoService] that signs narinfos using
-/// a keyfile. The keyfile is parsed using [parse_keypair], the expected format is the nix one
-/// (`nix-store --generate-binary-cache-key` for more informations).
+/// [ServiceBuilder] implementation that builds a [SigningPathInfoService] signing
+/// [PathInfo] using a keyfile.
+///
+/// The keyfile is parsed using [parse_keypair], the expected format is the nix
+/// one (see `nix-store --generate-binary-cache-key` for more information).
 #[derive(serde::Deserialize)]
 pub struct KeyFileSigningPathInfoServiceConfig {
     /// Inner [PathInfoService], will be resolved using a [CompositionContext].
     pub inner: String,
-    /// Path to the keyfile in the nix format. It will be accessed once when building the service
+    /// Path to the keyfile in the nix format.
+    /// It will be accessed once when constructing the service.
     pub keyfile: PathBuf,
 }
 
@@ -127,10 +129,12 @@ impl ServiceBuilder for KeyFileSigningPathInfoServiceConfig {
 }
 
 #[cfg(test)]
-pub(crate) fn test_signing_service() -> Arc<dyn PathInfoService> {
+/// Helper to construct a [SigningPathInfoService], with the dummy keypair.
+/// Not inside the submodule as we also use it
+pub fn test_signing_service() -> Arc<dyn PathInfoService> {
     use crate::utils::gen_test_pathinfo_service;
 
-    Arc::new(SigningPathInfoService::new(
+    Arc::new(super::SigningPathInfoService::new(
         "test".into(),
         gen_test_pathinfo_service(),
         parse_keypair(DUMMY_KEYPAIR)
@@ -140,9 +144,10 @@ pub(crate) fn test_signing_service() -> Arc<dyn PathInfoService> {
 }
 
 #[cfg(test)]
-pub const DUMMY_KEYPAIR: &str = "do.not.use:sGPzxuK5WvWPraytx+6sjtaff866sYlfvErE6x0hFEhy5eqe7OVZ8ZMqZ/ME/HaRdKGNGvJkyGKXYTaeA6lR3A==";
+const DUMMY_KEYPAIR: &str = "cache.example.com-1:cCta2MEsRNuYCgWYyeRXLyfoFpKhQJKn8gLMeXWAb7vIpRKKo/3JoxJ24OYa3DxT2JVV38KjK/1ywHWuMe2JEw==";
 #[cfg(test)]
-pub const DUMMY_VERIFYING_KEY: &str = "do.not.use:cuXqnuzlWfGTKmfzBPx2kXShjRryZMhil2E2ngOpUdw=";
+const DUMMY_VERIFYING_KEY: &str =
+    "cache.example.com-1:yKUSiqP9yaMSduDmGtw8U9iVVd/Coyv9csB1rjHtiRM=";
 
 #[cfg(test)]
 mod test {
@@ -184,16 +189,12 @@ mod test {
             .expect("The retrieved narinfo to be signed")
             .as_ref();
 
-        // load our keypair from the fixtures
-        let (signing_key, _verifying_key) =
-            super::parse_keypair(super::DUMMY_KEYPAIR).expect("must succeed");
-
-        // ensure that the new signature is using this key name
-        assert_eq!(signing_key.name(), *new_sig.name());
-
         // verify the new signature against the verifying key
         let verifying_key =
             VerifyingKey::parse(super::DUMMY_VERIFYING_KEY).expect("parsing dummy verifying key");
+
+        // ensure that the new signature is using this key name
+        assert_eq!(verifying_key.name(), *new_sig.name());
 
         assert!(
             verifying_key.verify(&path_info.to_narinfo().fingerprint(), &new_sig),

@@ -25,9 +25,6 @@ pub use self::nix_http::{NixHTTPPathInfoService, NixHTTPPathInfoServiceConfig};
 pub use self::redb::{RedbPathInfoService, RedbPathInfoServiceConfig};
 pub use self::signing_wrapper::{KeyFileSigningPathInfoServiceConfig, SigningPathInfoService};
 
-#[cfg(test)]
-pub(crate) use self::signing_wrapper::test_signing_service;
-
 #[cfg(feature = "cloud")]
 mod bigtable;
 #[cfg(feature = "cloud")]

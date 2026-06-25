@@ -9,7 +9,7 @@ use rstest_reuse::{self, *};
 use super::{PathInfo, PathInfoService};
 use crate::fixtures::{DUMMY_PATH_DIGEST, PATH_INFO};
 use crate::pathinfoservice::redb::{RedbPathInfoService, RedbPathInfoServiceConfig};
-use crate::pathinfoservice::test_signing_service;
+use crate::pathinfoservice::signing_wrapper::test_signing_service;
 
 #[cfg(test)]
 #[cfg(feature = "fuse")]
