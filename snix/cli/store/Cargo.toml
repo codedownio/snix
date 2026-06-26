@@ -43,8 +43,8 @@ tracing-indicatif.workspace = true
 
 [features]
 default = ["fuse", "otlp", "tonic-reflection"]
-fuse = ["snix-castore/fuse"]
-virtiofs = ["snix-castore/virtiofs"]
+fuse = ["snix-castore/fuse", "snix-store/fs"]
+virtiofs = ["snix-castore/virtiofs", "snix-store/fs"]
 tonic-reflection = ["dep:tonic-reflection"]
 otlp = ["snix-tracing/otlp", "dep:tonic-tracing-opentelemetry"]
 tracing-chrome = ["snix-tracing/chrome"]

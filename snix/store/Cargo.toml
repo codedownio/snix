@@ -71,16 +71,17 @@ tempfile.workspace = true
 tokio-retry.workspace = true
 tokio-tar.workspace = true
 hex-literal.workspace = true
+# We have an integration test that mounting a fuse filesystem.
+snix-castore = { path = "../castore", features = ["fs", "fuse"] }
 
 [features]
-default = ["cloud", "fuse"]
+default = ["cloud", "fs"]
 cloud = [
   "dep:bigtable_rs",
   "dep:googleapis-tonic-google-bigtable-v2",
   "snix-castore/cloud",
 ]
-fuse = ["snix-castore/fuse"]
-virtiofs = ["snix-castore/virtiofs"]
+fs = ["snix-castore/fs"]
 xp-composition-cli = [
   "toml",
   "snix-castore/xp-composition-url-refs",
@@ -92,8 +93,7 @@ xp-composition-cli = [
 integration = []
 
 [package.metadata.docs.rs]
-# Everything but virtiofs since that doesn't build on MacOS
-features = ["cloud", "fuse", "xp-composition-cli"]
+features = ["cloud", "fs", "xp-composition-cli"]
 
 [package.metadata.cargo-machete]
 ignored = ["md-5", "tonic-prost"]

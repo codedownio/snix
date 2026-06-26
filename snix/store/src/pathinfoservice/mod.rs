@@ -30,10 +30,9 @@ mod bigtable;
 #[cfg(feature = "cloud")]
 pub use self::bigtable::{BigtableParameters, BigtablePathInfoService};
 
-#[cfg(any(feature = "fuse", feature = "virtiofs"))]
+#[cfg(feature = "fs")]
 mod fs;
-
-#[cfg(any(feature = "fuse", feature = "virtiofs"))]
+#[cfg(feature = "fs")]
 pub use self::fs::RootNodesWrapper;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync + 'static>;

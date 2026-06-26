@@ -29,7 +29,6 @@ pub struct Error(#[from] super::Error);
 /// Implements root node lookup for any [PathInfoService]. This represents a flat
 /// directory structure like /nix/store where each entry in the root filesystem
 /// directory corresponds to a CA node.
-#[cfg(any(feature = "fuse", feature = "virtiofs"))]
 #[async_trait]
 impl<T> RootNodes for RootNodesWrapper<T>
 where

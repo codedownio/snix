@@ -23716,7 +23716,10 @@ rec {
             "otlp"
             "tonic-reflection"
           ];
-          "fuse" = [ "snix-castore/fuse" ];
+          "fuse" = [
+            "snix-castore/fuse"
+            "snix-store/fs"
+          ];
           "otlp" = [
             "snix-tracing/otlp"
             "dep:tonic-tracing-opentelemetry"
@@ -23724,7 +23727,10 @@ rec {
           "tonic-reflection" = [ "dep:tonic-reflection" ];
           "tracing-chrome" = [ "snix-tracing/chrome" ];
           "tracing-tracy" = [ "snix-tracing/tracy" ];
-          "virtiofs" = [ "snix-castore/virtiofs" ];
+          "virtiofs" = [
+            "snix-castore/virtiofs"
+            "snix-store/fs"
+          ];
           "xp-store-composition-cli" = [
             "snix-store/xp-composition-cli"
             "snix-castore/xp-composition-cli"
@@ -24441,6 +24447,14 @@ rec {
             packageId = "rstest_reuse";
           }
           {
+            name = "snix-castore";
+            packageId = "snix-castore";
+            features = [
+              "fs"
+              "fuse"
+            ];
+          }
+          {
             name = "tempfile";
             packageId = "tempfile";
           }
@@ -24457,11 +24471,10 @@ rec {
           ];
           "default" = [
             "cloud"
-            "fuse"
+            "fs"
           ];
-          "fuse" = [ "snix-castore/fuse" ];
+          "fs" = [ "snix-castore/fs" ];
           "toml" = [ "dep:toml" ];
-          "virtiofs" = [ "snix-castore/virtiofs" ];
           "xp-composition-cli" = [
             "toml"
             "snix-castore/xp-composition-url-refs"
@@ -24471,10 +24484,9 @@ rec {
         resolvedDefaultFeatures = [
           "cloud"
           "default"
-          "fuse"
+          "fs"
           "integration"
           "toml"
-          "virtiofs"
           "xp-composition-cli"
         ];
       };

@@ -12,7 +12,7 @@ use crate::pathinfoservice::redb::{RedbPathInfoService, RedbPathInfoServiceConfi
 use crate::pathinfoservice::signing_wrapper::test_signing_service;
 
 #[cfg(test)]
-#[cfg(feature = "fuse")]
+#[cfg(feature = "fs")]
 mod fs;
 
 mod utils;

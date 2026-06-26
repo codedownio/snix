@@ -26,16 +26,12 @@
       old.passthru
       // (depot.snix.utils.mkFeaturePowerset {
         inherit (old) crateName;
-        features = (
-          [
-            "cloud"
-            "fuse"
-            "otlp"
-            "xp-composition-cli"
-          ]
-          # virtiofs feature currently fails to build on Darwin
-          ++ lib.optional pkgs.stdenv.isLinux "virtiofs"
-        );
+        features = [
+          "cloud"
+          "fs"
+          "otlp"
+          "xp-composition-cli"
+        ];
         override.testPreRun = ''
           export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
         '';
