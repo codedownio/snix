@@ -11020,6 +11020,10 @@ rec {
             optional = true;
           }
           {
+            name = "md-5";
+            packageId = "md-5 0.10.6";
+          }
+          {
             name = "nix-compat-derive";
             packageId = "nix-compat-derive";
             optional = true;
@@ -11057,6 +11061,10 @@ rec {
               "macros"
               "std"
             ];
+          }
+          {
+            name = "sha1";
+            packageId = "sha1";
           }
           {
             name = "sha2";

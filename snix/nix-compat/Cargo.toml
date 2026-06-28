@@ -32,10 +32,12 @@ ed25519.workspace = true
 ed25519-dalek.workspace = true
 futures = { workspace = true, optional = true }
 hashbrown = { workspace = true, optional = true }
+md-5.workspace = true
 nom.workspace = true
 serde = { workspace = true, features = ["derive"], optional = true }
 serde_json = { workspace = true, optional = true }
 serde_with = { workspace = true, optional = true }
+sha1.workspace = true
 sha2.workspace = true
 smol_str.workspace = true
 thiserror.workspace = true

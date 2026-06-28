@@ -6743,12 +6743,20 @@ rec {
             packageId = "ed25519-dalek";
           }
           {
+            name = "md-5";
+            packageId = "md-5";
+          }
+          {
             name = "nom";
             packageId = "nom";
           }
           {
             name = "num_enum";
             packageId = "num_enum";
+          }
+          {
+            name = "sha1";
+            packageId = "sha1";
           }
           {
             name = "sha2";
