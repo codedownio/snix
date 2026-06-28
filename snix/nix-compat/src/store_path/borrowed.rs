@@ -70,7 +70,7 @@ impl<'a> StorePathRef<'a> {
         digest: [u8; DIGEST_SIZE],
     ) -> Result<Self, ParseStorePathError> {
         Ok(Self {
-            name: validate_name(name)?,
+            name: validate_name(name.as_bytes())?,
             digest,
         })
     }

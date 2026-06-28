@@ -275,18 +275,17 @@ impl EvalIO for SnixStoreIO {
 
     #[instrument(skip(self), ret(level = Level::TRACE), err)]
     fn import_path(&self, path: &std::path::Path) -> io::Result<std::path::PathBuf> {
+        let file_name = path.file_name().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidFilename,
+                "path without basename encountered",
+            )
+        })?;
         let path_info = self.tokio_handle.block_on({
             snix_store::import::import_path_as_nar_ca(
                 path,
-                nix_compat::store_path::validate_name_as_os_str(path.file_name().ok_or_else(
-                    || {
-                        io::Error::new(
-                            io::ErrorKind::InvalidFilename,
-                            "path without basename encountered",
-                        )
-                    },
-                )?)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+                nix_compat::store_path::validate_name_from_os_str(file_name)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
                 &self.build_state.blob_service,
                 &self.build_state.directory_service,
                 &self.build_state.path_info_service,

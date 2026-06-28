@@ -204,9 +204,7 @@ static NAME_CHARS: [bool; 256] = {
 
 /// Checks a given &[u8] to match the restrictions for [StorePath::name], and
 /// returns the name as &str if successful.
-pub fn validate_name(s: &(impl AsRef<[u8]> + ?Sized)) -> Result<&str, ParseStorePathNameError> {
-    let s = s.as_ref();
-
+pub fn validate_name(s: &[u8]) -> Result<&str, ParseStorePathNameError> {
     // Empty or excessively long names are not allowed.
     if s.is_empty() || s.len() > 211 {
         return Err(ParseStorePathNameError::Length);
@@ -233,12 +231,8 @@ pub fn validate_name(s: &(impl AsRef<[u8]> + ?Sized)) -> Result<&str, ParseStore
 
 /// Checks a given OsStr to match the restrictions for [StorePath::name], and
 /// returns the name as &str if successful.
-pub fn validate_name_as_os_str(
-    s: &(impl AsRef<std::ffi::OsStr> + ?Sized),
-) -> Result<&str, ParseStorePathNameError> {
-    let s = s.as_ref().to_str().ok_or(ParseStorePathNameError::Name)?;
-
-    validate_name(s)
+pub fn validate_name_from_os_str(s: &std::ffi::OsStr) -> Result<&str, ParseStorePathNameError> {
+    validate_name(s.as_encoded_bytes())
 }
 
 impl fmt::Display for StorePath {

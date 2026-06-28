@@ -35,11 +35,12 @@ impl OutputName {
 }
 
 fn validate<S: AsRef<str>>(s: S) -> Result<(), ParseOutputNameError> {
-    store_path::validate_name(s.as_ref())?;
+    let name = s.as_ref();
+    store_path::validate_name(name.as_bytes())?;
 
     // Disallow the reserved 'drv' name, which may appear in store path names,
     // but not in Derivations.
-    if s.as_ref() == "drv" {
+    if name == "drv" {
         return Err(ParseOutputNameError::ReservedNameDrv);
     }
 

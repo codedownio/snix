@@ -197,16 +197,17 @@ mod import_builtins {
                     })?
                     .to_owned()
             }
-            None => nix_compat::store_path::validate_name_as_os_str(path.file_name().ok_or_else(
-                || {
+            None => {
+                let file_name = path.file_name().ok_or_else(|| {
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidFilename,
                         "path without basename encountered",
                     )
-                },
-            )?)
-            .map_err(|err| ErrorKind::SnixError(Arc::new(err)))?
-            .to_owned(),
+                })?;
+                nix_compat::store_path::validate_name_from_os_str(file_name)
+                    .map_err(|err| ErrorKind::SnixError(Arc::new(err)))?
+                    .to_owned()
+            }
         };
         // As a first step, we ingest the contents, and get back a root node,
         // and optionally the sha256 a flat file.
