@@ -103,8 +103,7 @@ libc = "0.2.158"
 lru = "0.12.4"
 md-5 = "0.10.6"
 mimalloc = "0.1.43"
-# https://github.com/asomers/mockall/pull/686, compatibility with the `#[auto_impl]` macro
-mockall = { git = "https://github.com/asomers/mockall.git", rev = "2270cdb77897aeb55326ba730f1c1fc2131cc8e1" }
+mockall = "0.15.0"
 nix = "0.27.1"
 nom = "8.0"
 object_store = "0.14.0"

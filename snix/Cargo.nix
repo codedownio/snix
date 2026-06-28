@@ -13140,14 +13140,9 @@ rec {
       };
       "mockall" = rec {
         crateName = "mockall";
-        version = "0.14.0";
+        version = "0.15.0";
         edition = "2021";
-        workspace_member = null;
-        src = pkgs.fetchgit {
-          url = "https://github.com/asomers/mockall.git";
-          rev = "2270cdb77897aeb55326ba730f1c1fc2131cc8e1";
-          sha256 = "1gs86vzn7rydiikyqj08rd5zyay1vkdf2kbq2glcnccj29f3mx0n";
-        };
+        sha256 = "12mgvvd7c9k2rs71cak3dknmpvnwnbyj1x3bx4jljcyfwggysv0s";
         authors = [
           "Alan Somers <asomers@gmail.com>"
         ];
@@ -13187,14 +13182,9 @@ rec {
       };
       "mockall_derive" = rec {
         crateName = "mockall_derive";
-        version = "0.14.0";
+        version = "0.15.0";
         edition = "2021";
-        workspace_member = null;
-        src = pkgs.fetchgit {
-          url = "https://github.com/asomers/mockall.git";
-          rev = "2270cdb77897aeb55326ba730f1c1fc2131cc8e1";
-          sha256 = "1gs86vzn7rydiikyqj08rd5zyay1vkdf2kbq2glcnccj29f3mx0n";
-        };
+        sha256 = "1n3g84c6m7av8x2v1filfvlj7qdic17c46l61gnaw553x3xidzlw";
         procMacro = true;
         authors = [
           "Alan Somers <asomers@gmail.com>"

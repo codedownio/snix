@@ -1,6 +1,4 @@
 {
-  "git+https://github.com/asomers/mockall.git?rev=2270cdb77897aeb55326ba730f1c1fc2131cc8e1#mockall@0.14.0": "1gs86vzn7rydiikyqj08rd5zyay1vkdf2kbq2glcnccj29f3mx0n",
-  "git+https://github.com/asomers/mockall.git?rev=2270cdb77897aeb55326ba730f1c1fc2131cc8e1#mockall_derive@0.14.0": "1gs86vzn7rydiikyqj08rd5zyay1vkdf2kbq2glcnccj29f3mx0n",
   "git+https://github.com/flokli/grpc-rust.git?rev=292ed1a6aa8011208f685e9e116ea205d3156256#tonic-build@0.14.6": "0gl6vxwpmq5avdmllagp2xgdazacr3z3nlsf6kgy7svnpflrjpdn",
   "git+https://github.com/flokli/grpc-rust.git?rev=292ed1a6aa8011208f685e9e116ea205d3156256#tonic-health@0.14.6": "0gl6vxwpmq5avdmllagp2xgdazacr3z3nlsf6kgy7svnpflrjpdn",
   "git+https://github.com/flokli/grpc-rust.git?rev=292ed1a6aa8011208f685e9e116ea205d3156256#tonic-prost-build@0.14.6": "0gl6vxwpmq5avdmllagp2xgdazacr3z3nlsf6kgy7svnpflrjpdn",
