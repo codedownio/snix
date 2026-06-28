@@ -13969,6 +13969,10 @@ rec {
             usesDefaultFeatures = false;
           }
           {
+            name = "rstest_reuse";
+            packageId = "rstest_reuse";
+          }
+          {
             name = "smol_str";
             packageId = "smol_str";
           }

@@ -7,12 +7,18 @@ use thiserror;
 
 mod algos;
 mod ca_hash;
+#[cfg(feature = "async")]
+mod io;
 #[cfg(feature = "serde")]
 pub mod serde;
+mod sha256;
 
 pub use algos::HashAlgo;
 pub use ca_hash::CAHash;
 pub use ca_hash::HashMode as CAHashMode;
+#[cfg(feature = "async")]
+pub use io::{copy_buf_sha256, copy_sha256};
+pub use sha256::{Sha256, Sha256Digester};
 
 /// NixHash represents hashes known by Nix (md5/sha1/sha256/sha512).
 ///
