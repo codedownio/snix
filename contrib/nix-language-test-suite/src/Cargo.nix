@@ -992,6 +992,11 @@ rec {
             usesDefaultFeatures = false;
           }
           {
+            name = "untrusted";
+            packageId = "untrusted 0.7.1";
+            optional = true;
+          }
+          {
             name = "zeroize";
             packageId = "zeroize";
           }
@@ -1020,8 +1025,12 @@ rec {
           "ring-sig-verify" = [ "dep:untrusted" ];
         };
         resolvedDefaultFeatures = [
+          "alloc"
           "aws-lc-sys"
+          "default"
           "prebuilt-nasm"
+          "ring-io"
+          "ring-sig-verify"
         ];
       };
       "aws-lc-sys" = rec {
@@ -2874,9 +2883,9 @@ rec {
       };
       "bigtable_rs" = rec {
         crateName = "bigtable_rs";
-        version = "0.3.0";
+        version = "0.4.0";
         edition = "2021";
-        sha256 = "0jlgcl6fr6hxry3ybihiq742k9gwsd801rq6f1lxmhnn54p38a8s";
+        sha256 = "0p4qdm0rffjdpr10hr04rw147wfysgii1kbxa229nx1fw42q7wsi";
         authors = [
           "Fuyang Liu <liufuyang@users.noreply.github.com>"
         ];
@@ -2888,6 +2897,7 @@ rec {
           {
             name = "gcp_auth";
             packageId = "gcp_auth";
+            usesDefaultFeatures = false;
           }
           {
             name = "googleapis-tonic-google-bigtable-v2";
@@ -2964,12 +2974,18 @@ rec {
           }
         ];
         features = {
-          "default" = [ "tonic-tls-aws-lc" ];
+          "default" = [
+            "gcp-auth-aws-lc-rs"
+            "tonic-tls-aws-lc"
+          ];
+          "gcp-auth-aws-lc-rs" = [ "gcp_auth/aws-lc-rs" ];
+          "gcp-auth-ring" = [ "gcp_auth/ring" ];
           "tonic-tls-aws-lc" = [ "tonic/tls-aws-lc" ];
           "tonic-tls-ring" = [ "tonic/tls-ring" ];
         };
         resolvedDefaultFeatures = [
           "default"
+          "gcp-auth-aws-lc-rs"
           "tonic-tls-aws-lc"
         ];
       };
@@ -6515,13 +6531,18 @@ rec {
       };
       "gcp_auth" = rec {
         crateName = "gcp_auth";
-        version = "0.12.6";
+        version = "0.12.7";
         edition = "2021";
-        sha256 = "1vpk9cgfs5a5x2v7z4d0q65ayf8864v83wqs260a6hm016sd1cy2";
+        sha256 = "0q3jgz3gq8akiclc2jdvs6bwwbhhsylnha3fgy70pdj5qsy7vli6";
         dependencies = [
           {
             name = "async-trait";
             packageId = "async-trait";
+          }
+          {
+            name = "aws-lc-rs";
+            packageId = "aws-lc-rs";
+            optional = true;
           }
           {
             name = "base64";
@@ -6561,6 +6582,7 @@ rec {
             features = [
               "http1"
               "http2"
+              "rustls-native-certs"
             ];
           }
           {
@@ -6569,8 +6591,10 @@ rec {
             features = [ "client-legacy" ];
           }
           {
-            name = "ring";
-            packageId = "ring";
+            name = "rustls";
+            packageId = "rustls";
+            usesDefaultFeatures = false;
+            features = [ "std" ];
           }
           {
             name = "rustls-pki-types";
@@ -6627,20 +6651,17 @@ rec {
         ];
         features = {
           "aws-lc-rs" = [
-            "hyper-rustls/rustls-native-certs"
             "hyper-rustls/aws-lc-rs"
+            "dep:aws-lc-rs"
           ];
           "default" = [ "ring" ];
           "ring" = [
-            "hyper-rustls/rustls-native-certs"
             "hyper-rustls/ring"
+            "dep:ring"
           ];
           "webpki-roots" = [ "hyper-rustls/webpki-roots" ];
         };
-        resolvedDefaultFeatures = [
-          "default"
-          "ring"
-        ];
+        resolvedDefaultFeatures = [ "aws-lc-rs" ];
       };
       "genawaiter" = rec {
         crateName = "genawaiter";
@@ -7138,9 +7159,9 @@ rec {
       };
       "googleapis-tonic-google-api" = rec {
         crateName = "googleapis-tonic-google-api";
-        version = "0.27.0";
+        version = "0.30.0";
         edition = "2021";
-        sha256 = "07y1hcqsk17sw0s9ydpvdlha8x82mhzh488gvicnqya0rb56ahic";
+        sha256 = "1s5cnn3h4s7vy4xa8iyhaipw8ibz74dgqdvpv6dclmp6fwsrz8zw";
         libName = "googleapis_tonic_google_api";
         authors = [
           "bouzuya <m@bouzuya.net>"
@@ -7179,9 +7200,9 @@ rec {
       };
       "googleapis-tonic-google-bigtable-v2" = rec {
         crateName = "googleapis-tonic-google-bigtable-v2";
-        version = "0.36.0";
+        version = "0.39.0";
         edition = "2021";
-        sha256 = "1162kbw9w2wgw2r1186918bgrc3dbndkpm393gjaknn87c1yn5j4";
+        sha256 = "1nzsmrf89sajvz096isig8vhfvjm8z63wi93nv9ipbfyg90cp9r6";
         libName = "googleapis_tonic_google_bigtable_v2";
         authors = [
           "bouzuya <m@bouzuya.net>"
@@ -7256,9 +7277,9 @@ rec {
       };
       "googleapis-tonic-google-rpc" = rec {
         crateName = "googleapis-tonic-google-rpc";
-        version = "0.23.0";
+        version = "0.25.0";
         edition = "2021";
-        sha256 = "0mm0k6y2a9aacjxvcv3s6dnxj50kcv5qclf25mgm6a6jh01dwz1f";
+        sha256 = "1bxnclxfbvwn712s38d2xrjph3vkr774ncsrl0jp7rc22yl252cg";
         libName = "googleapis_tonic_google_rpc";
         authors = [
           "bouzuya <m@bouzuya.net>"
@@ -7297,9 +7318,9 @@ rec {
       };
       "googleapis-tonic-google-type" = rec {
         crateName = "googleapis-tonic-google-type";
-        version = "0.21.0";
+        version = "0.24.0";
         edition = "2021";
-        sha256 = "1nvrx63id58pph61lnv7m692yg1hx05nsma44qznkjin7z54s739";
+        sha256 = "0baav3hdirjag9cl3z2x1nplgmmzaw1s9ippzywfm15vsq2gqdfc";
         libName = "googleapis_tonic_google_type";
         authors = [
           "bouzuya <m@bouzuya.net>"
@@ -8165,7 +8186,6 @@ rec {
           "http1"
           "http2"
           "native-tokio"
-          "ring"
           "rustls-native-certs"
           "tls12"
         ];
@@ -9217,34 +9237,6 @@ rec {
         version = "0.12.1";
         edition = "2018";
         sha256 = "0s95jbb3ndj1lvfxyq5wanc0fm0r6hg6q4ngb92qlfdxvci10ads";
-        authors = [
-          "bluss"
-        ];
-        dependencies = [
-          {
-            name = "either";
-            packageId = "either";
-            usesDefaultFeatures = false;
-          }
-        ];
-        features = {
-          "default" = [ "use_std" ];
-          "use_std" = [
-            "use_alloc"
-            "either/use_std"
-          ];
-        };
-        resolvedDefaultFeatures = [
-          "default"
-          "use_alloc"
-          "use_std"
-        ];
-      };
-      "itertools 0.14.0" = rec {
-        crateName = "itertools";
-        version = "0.14.0";
-        edition = "2018";
-        sha256 = "118j6l1vs2mx65dqhwyssbrxpawa90886m3mzafdvyip41w2q69b";
         authors = [
           "bluss"
         ];
@@ -12863,9 +12855,9 @@ rec {
       };
       "prost" = rec {
         crateName = "prost";
-        version = "0.14.3";
+        version = "0.14.4";
         edition = "2021";
-        sha256 = "0s057z9nzggzy7x4bbsiar852hg7zb81f4z4phcdb0ig99971snj";
+        sha256 = "1qas5v5rap45f43v3ja0jngxrrafrkcwl0iw5a3ld1pz2rscd2jj";
         authors = [
           "Dan Burkert <dan@danburkert.com>"
           "Lucio Franco <luciofranco14@gmail.com>"
@@ -12916,7 +12908,7 @@ rec {
           }
           {
             name = "itertools";
-            packageId = "itertools 0.14.0";
+            packageId = "itertools 0.12.1";
             usesDefaultFeatures = false;
             features = [ "use_alloc" ];
           }
@@ -13000,9 +12992,9 @@ rec {
       };
       "prost-derive" = rec {
         crateName = "prost-derive";
-        version = "0.14.3";
+        version = "0.14.4";
         edition = "2021";
-        sha256 = "02zvva6kb0pfvlyc4nac6gd37ncjrs8jq5scxcq4nbqkc8wh5ii7";
+        sha256 = "1pqa77d7da5pf6ba3kjj7510m5cynz6902ax01ckvr0pfrgv4w5m";
         procMacro = true;
         libName = "prost_derive";
         authors = [
@@ -13018,7 +13010,7 @@ rec {
           }
           {
             name = "itertools";
-            packageId = "itertools 0.14.0";
+            packageId = "itertools 0.12.1";
           }
           {
             name = "proc-macro2";
@@ -13038,9 +13030,9 @@ rec {
       };
       "prost-types" = rec {
         crateName = "prost-types";
-        version = "0.14.3";
+        version = "0.14.4";
         edition = "2021";
-        sha256 = "1mrxrciryfgi6a0vmrgyj3g27r9hdhlgwkq71cgv3icbvg5w94c9";
+        sha256 = "02ivjvc4cwl5bfgjs3l00hwlrk74z8zlg1xcgx60bww8fvf6fjgr";
         libName = "prost_types";
         authors = [
           "Dan Burkert <dan@danburkert.com>"
@@ -15213,7 +15205,7 @@ rec {
           }
           {
             name = "untrusted";
-            packageId = "untrusted";
+            packageId = "untrusted 0.9.0";
           }
           {
             name = "windows-sys";
@@ -15842,11 +15834,6 @@ rec {
             ];
           }
           {
-            name = "ring";
-            packageId = "ring";
-            optional = true;
-          }
-          {
             name = "rustls-pki-types";
             packageId = "rustls-pki-types";
             rename = "pki-types";
@@ -15926,7 +15913,6 @@ rec {
           "log"
           "logging"
           "prefer-post-quantum"
-          "ring"
           "std"
           "tls12"
         ];
@@ -16181,7 +16167,7 @@ rec {
           }
           {
             name = "untrusted";
-            packageId = "untrusted";
+            packageId = "untrusted 0.9.0";
           }
         ];
         features = {
@@ -16212,7 +16198,6 @@ rec {
         resolvedDefaultFeatures = [
           "alloc"
           "aws-lc-rs"
-          "ring"
           "std"
         ];
       };
@@ -18582,6 +18567,16 @@ rec {
             packageId = "tonic-prost-build";
           }
         ];
+        devDependencies = [
+          {
+            name = "snix-castore";
+            packageId = "snix-castore";
+            features = [
+              "fs"
+              "fuse"
+            ];
+          }
+        ];
         features = {
           "cloud" = [
             "dep:bigtable_rs"
@@ -18590,11 +18585,10 @@ rec {
           ];
           "default" = [
             "cloud"
-            "fuse"
+            "fs"
           ];
-          "fuse" = [ "snix-castore/fuse" ];
+          "fs" = [ "snix-castore/fs" ];
           "toml" = [ "dep:toml" ];
-          "virtiofs" = [ "snix-castore/virtiofs" ];
           "xp-composition-cli" = [
             "toml"
             "snix-castore/xp-composition-url-refs"
@@ -22175,7 +22169,18 @@ rec {
           "std"
         ];
       };
-      "untrusted" = rec {
+      "untrusted 0.7.1" = rec {
+        crateName = "untrusted";
+        version = "0.7.1";
+        edition = "2018";
+        sha256 = "0jkbqaj9d3v5a91pp3wp9mffvng1nhycx6sh4qkdd9qyr62ccmm1";
+        libPath = "src/untrusted.rs";
+        authors = [
+          "Brian Smith <brian@briansmith.org>"
+        ];
+
+      };
+      "untrusted 0.9.0" = rec {
         crateName = "untrusted";
         version = "0.9.0";
         edition = "2018";
