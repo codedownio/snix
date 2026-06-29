@@ -1,5 +1,6 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+use std::fmt::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -17,7 +18,6 @@ use snix_glue::{
     snix_io::SnixIO,
     snix_store_io::SnixStoreIO,
 };
-use std::fmt::Write;
 use tracing::{Span, info_span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
@@ -179,17 +179,26 @@ pub fn evaluate<E: std::io::Write + Clone + Send>(
     if let Some(dumpdir) = &args.drv_dumpdir {
         // Dump all known derivations files to `dumpdir`.
         std::fs::create_dir_all(dumpdir).expect("failed to create drv dumpdir");
-        snix_store_io
+
+        for (drv_path, drv) in snix_store_io
             .build_state
             .known_paths
             .borrow()
             .get_derivations()
-            // Skip already dumped derivations.
-            .filter(|(drv_path, _)| !dumpdir.join(drv_path.to_string()).exists())
-            .for_each(|(drv_path, drv)| {
-                std::fs::write(dumpdir.join(drv_path.to_string()), drv.to_aterm_bytes())
-                    .expect("failed to write drv to dumpdir");
-            })
+        {
+            match std::fs::File::create_new(dumpdir.join(drv_path.to_string())) {
+                Ok(mut f) => {
+                    use std::io::Write;
+                    drv.serialize(&mut f).expect("writing to .drv file");
+                    f.flush().expect("flushing .drv file");
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Skip already dumped derivations.
+                    continue;
+                }
+                Err(err) => panic!("{}", err),
+            }
+        }
     }
 
     Ok(EvalResult {
