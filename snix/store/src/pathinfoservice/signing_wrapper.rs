@@ -17,7 +17,7 @@ use tracing::instrument;
 /// PathInfoService signing [PathInfo] inserted into it before inserting into
 /// the inner [PathInfoService].
 ///
-/// The implementation itself is generic generic (see [nix_compat::narinfo::SigningKey]),
+/// The implementation itself is generic (see [nix_compat::narinfo::SigningKey]),
 /// but we currently only have [KeyFileSigningPathInfoServiceConfig] to
 /// construct with, using a keyfile to sign with.
 pub struct SigningPathInfoService<T, S> {
