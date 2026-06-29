@@ -3,3 +3,27 @@
 code.language-console .line .cl .gp {
     user-select: none;
 }
+
+// snix#88: keep the site readable with JavaScript disabled.
+//
+// The Doks theme renders `<html data-bs-theme="auto">` and relies on its
+// color-mode.js to rewrite the attribute to a concrete "light" or "dark"
+// value. With JS disabled the attribute stays "auto", which no CSS rule
+// matches: Bootstrap falls back to its light defaults for the page body, but
+// doks-core defines its dark Starlight (`--sl-*`) palette on the bare `:root`,
+// so inline `code` and code blocks render as dark text on a dark background.
+//
+// Mirror doks-core's light palette (assets/scss/common/_colors.scss) for the
+// unresolved "auto" state so it matches the light page Bootstrap renders.
+:root[data-bs-theme="auto"],
+[data-bs-theme="auto"] ::backdrop {
+    --sl-color-white: hsl(224, 10%, 10%);
+    --sl-color-gray-1: hsl(224, 14%, 16%);
+    --sl-color-gray-2: hsl(224, 10%, 23%);
+    --sl-color-gray-3: hsl(224, 7%, 36%);
+    --sl-color-gray-4: hsl(224, 6%, 56%);
+    --sl-color-gray-5: hsl(224, 6%, 77%);
+    --sl-color-gray-6: hsl(224, 20%, 94%);
+    --sl-color-gray-7: hsl(224, 19%, 97%);
+    --sl-color-black: hsl(0, 0%, 100%);
+}
