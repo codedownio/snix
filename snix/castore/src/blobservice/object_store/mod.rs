@@ -13,12 +13,13 @@ use object_store::{ObjectStore, ObjectStoreExt, ObjectStoreScheme, path::Path};
 use pin_project_lite::pin_project;
 use prost::Message;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio_util::io::InspectReader;
 use tonic::async_trait;
 use tracing::{Level, debug, instrument, trace};
 use url::Url;
 
 use crate::{
-    B3Digest, B3HashingReader,
+    B3Digest,
     composition::{CompositionContext, ServiceBuilder},
     proto::{StatBlobResponse, stat_blob_response::ChunkMeta},
 };
@@ -364,7 +365,10 @@ async fn chunk_and_upload<R: AsyncRead + Unpin>(
     max_chunk_size: u32,
 ) -> io::Result<B3Digest> {
     // wrap reader with something calculating the blake3 hash of all data read.
-    let mut b3_r = B3HashingReader::from(r);
+    let mut hasher = blake3::Hasher::new();
+    let mut b3_r = InspectReader::new(r, |data| {
+        hasher.update(data);
+    });
     // set up a fastcdc chunker
     let mut chunker =
         AsyncStreamCDC::new(&mut b3_r, min_chunk_size, avg_chunk_size, max_chunk_size);
@@ -399,7 +403,7 @@ async fn chunk_and_upload<R: AsyncRead + Unpin>(
     };
 
     // check for Blob, if it doesn't exist, persist.
-    let blob_digest: B3Digest = b3_r.digest().into();
+    let blob_digest: B3Digest = hasher.finalize().into();
     let blob_path = derive_blob_path(&base_path, &blob_digest);
 
     match object_store.head(&blob_path).await {

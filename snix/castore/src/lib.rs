@@ -2,7 +2,6 @@
 
 mod digests;
 mod errors;
-mod hashing_reader;
 
 pub mod blobservice;
 pub mod composition;
@@ -29,7 +28,6 @@ const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VE
 
 pub use digests::B3Digest;
 pub use errors::{DirectoryError, ValidateNodeError};
-pub use hashing_reader::{B3HashingReader, HashingReader};
 
 #[cfg(test)]
 mod tests;
