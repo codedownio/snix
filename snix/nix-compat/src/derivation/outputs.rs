@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fmt::Write as _};
 
 use crate::{
     derivation::{Output, OutputHash, OutputHashMode, OutputName, output::ParseOutputError},
+    nixhash::Sha256,
     store_path,
 };
 
@@ -342,7 +343,11 @@ impl Outputs {
                         false,
                     )
                 } else {
-                    store_path::build_output_path(&name, hash_derivation_modulo, &OutputName::out())
+                    store_path::build_output_path(
+                        &name,
+                        &Sha256::new(*hash_derivation_modulo),
+                        &OutputName::out(),
+                    )
                 }
                 .map_err(|e| OutputsError::InvalidOutputDerivationPath(name.to_string(), e))?;
 
@@ -363,11 +368,12 @@ impl Outputs {
                     };
 
                     // use [build_output_path] with [hash_derivation_modulo].
-                    let store_path =
-                        store_path::build_output_path(&name, hash_derivation_modulo, output_name)
-                            .map_err(|e| {
-                            OutputsError::InvalidOutputDerivationPath(name.to_string(), e)
-                        })?;
+                    let store_path = store_path::build_output_path(
+                        &name,
+                        &Sha256::new(*hash_derivation_modulo),
+                        output_name,
+                    )
+                    .map_err(|e| OutputsError::InvalidOutputDerivationPath(name.to_string(), e))?;
 
                     output.path = Some(store_path.to_owned());
                 }

@@ -2,10 +2,8 @@ use std::fmt::Display;
 
 use super::{ParseStorePathError, STORE_DIR, StorePathRef};
 use crate::derivation::OutputName;
-use crate::nixbase32;
-use crate::nixhash::{HashAlgo, NixHash};
-use data_encoding::HEXLOWER;
-use sha2::{Digest, Sha256};
+use crate::nixhash::{HashAlgo, NixHash, Sha256};
+use crate::{format_sha256, nixbase32};
 
 /// compress_hash takes an arbitrarily long sequence of bytes (usually
 /// a hash digest), and returns a sequence of bytes of length
@@ -35,7 +33,7 @@ pub fn build_text_path<'r, 'name>(
     content: impl AsRef<[u8]>,
     references: impl IntoIterator<Item = StorePathRef<'r>> + 'r,
 ) -> Result<StorePathRef<'name>, ParseStorePathError> {
-    build_text_path_from_content_digest(name, Sha256::digest(content.as_ref()), references)
+    build_text_path_from_content_digest(name, Sha256::digest_bytes(content.as_ref()), references)
 }
 
 /// This builds a store path, for a CAHash::Text type store path.
@@ -43,7 +41,7 @@ pub fn build_text_path<'r, 'name>(
 /// If you have the contents as a byte slice, you can also use [build_text_path].
 pub fn build_text_path_from_content_digest<'r, 'n>(
     name: &'n str,
-    content_digest: impl Into<[u8; 32]>,
+    content_digest: impl Into<Sha256>,
     references: impl IntoIterator<Item = StorePathRef<'r>> + 'r,
 ) -> Result<StorePathRef<'n>, ParseStorePathError> {
     // produce the sha256 digest of the contents
@@ -64,7 +62,7 @@ pub fn build_ca_path<'r, 'n>(
     let inner_digest = if let NixHash::Sha256(digest) = hash
         && is_recursive
     {
-        *digest
+        Sha256::new(*digest)
     } else {
         fod_digest(is_recursive, hash, None)
     };
@@ -88,7 +86,7 @@ pub fn build_ca_path<'r, 'n>(
 /// derivation and its closure.
 pub fn build_output_path<'n>(
     name: &'n str,
-    hash_derivation_modulo: &[u8; 32],
+    hash_derivation_modulo: &Sha256,
     output_name: &OutputName,
 ) -> Result<StorePathRef<'n>, ParseStorePathError> {
     build_store_path_from_fingerprint_parts(
@@ -110,13 +108,10 @@ pub fn build_output_path<'n>(
 /// passed along.
 fn build_store_path_from_fingerprint_parts<'n>(
     ty: impl Display,
-    inner_digest: &[u8; 32],
+    inner_digest: &Sha256,
     name: &'n str,
 ) -> Result<StorePathRef<'n>, ParseStorePathError> {
-    let fingerprint_hash = sha256!(
-        "{ty}:sha256:{}:{STORE_DIR}:{name}",
-        HEXLOWER.encode_display(inner_digest)
-    );
+    let fingerprint_hash = format_sha256!("{ty}:sha256:{inner_digest:x}:{STORE_DIR}:{name}");
     // name validation happens in here.
     StorePathRef::from_name_and_digest_fixed(name, compress_hash(&fingerprint_hash))
 }
@@ -125,7 +120,7 @@ pub(crate) fn fod_digest(
     is_recursive: bool,
     hash: &NixHash,
     out_output_path: Option<StorePathRef<'_>>,
-) -> [u8; 32] {
+) -> Sha256 {
     let absolute_sp_optional = std::fmt::from_fn(|f| {
         if let Some(sp) = &out_output_path {
             write!(f, "{}", sp.as_absolute_path_fmt())?
@@ -134,13 +129,13 @@ pub(crate) fn fod_digest(
     });
 
     if is_recursive {
-        sha256!(
+        format_sha256!(
             "fixed:out:r:{}:{}",
             hash.as_nix_lowerhex_string_fmt(),
             absolute_sp_optional
         )
     } else {
-        sha256!(
+        format_sha256!(
             "fixed:out:{}:{}",
             hash.as_nix_lowerhex_string_fmt(),
             absolute_sp_optional
@@ -192,7 +187,10 @@ where
 /// The actual placeholder is basically just a SHA256 hash encoded in
 /// cppnix format.
 pub fn hash_placeholder(name: &str) -> String {
-    format!("/{}", nixbase32::encode(&sha256!("nix-output:{name}")))
+    format!(
+        "/{}",
+        nixbase32::encode(&format_sha256!("nix-output:{name}"))
+    )
 }
 
 #[cfg(test)]

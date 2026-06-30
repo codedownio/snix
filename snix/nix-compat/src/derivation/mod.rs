@@ -1,8 +1,8 @@
+use crate::nixhash::Sha256Digester;
 use crate::store_path::{self, StorePath, StorePathRef};
 use bstr::BString;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
@@ -112,11 +112,14 @@ impl Derivation {
         let out_output = self.outputs.get(&OutputName::out())?;
         let out_output_hash = out_output.output_hash.as_ref()?;
 
-        Some(store_path::fod_digest(
-            out_output_hash.mode == OutputHashMode::Recursive,
-            &out_output_hash.hash,
-            out_output.path.as_ref().map(|sp| sp.as_ref()),
-        ))
+        Some(
+            store_path::fod_digest(
+                out_output_hash.mode == OutputHashMode::Recursive,
+                &out_output_hash.hash,
+                out_output.path.as_ref().map(|sp| sp.as_ref()),
+            )
+            .into(),
+        )
     }
 
     /// Calculates the hash of a derivation modulo fixed-output subderivations.
@@ -160,7 +163,7 @@ impl Derivation {
             // changing the keys changes the order, so we need to sort by keys again
             replacements.sort_by_key(|(k, _output_names)| *k);
 
-            let mut hasher = Sha256::new();
+            let mut hasher = Sha256Digester::new();
             self.serialize_with_replacements(&mut hasher, replacements.into_iter())
                 .unwrap();
 
