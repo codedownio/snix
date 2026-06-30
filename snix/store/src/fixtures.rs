@@ -1,6 +1,5 @@
 use crate::pathinfoservice::PathInfo;
-use md5::Digest;
-use nix_compat::nixhash::{CAHash, NixHash};
+use nix_compat::nixhash::{CAHash, NixHash, Sha256};
 use nix_compat::store_path::StorePath;
 use snix_castore::Node;
 use snix_castore::fixtures::{
@@ -148,7 +147,7 @@ pub static PATH_INFO_SYMLINK: LazyLock<PathInfo> = LazyLock::new(|| PathInfo {
     node: CASTORE_NODE_SYMLINK.clone(),
     references: vec![],
     nar_size: NAR_CONTENTS_SYMLINK.len() as u64,
-    nar_sha256: sha2::Sha256::digest(NAR_CONTENTS_SYMLINK.as_slice()).into(),
+    nar_sha256: Sha256::digest_bytes(NAR_CONTENTS_SYMLINK.as_slice()).into(),
     signatures: vec![],
     deriver: None,
     ca: None,

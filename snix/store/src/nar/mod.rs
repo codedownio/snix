@@ -4,7 +4,6 @@ use snix_castore::Node;
 use snix_castore::directoryservice::OrderingError;
 use tonic::async_trait;
 
-mod hashing_reader;
 mod import;
 mod listing;
 mod renderer;

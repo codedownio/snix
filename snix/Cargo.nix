@@ -5762,22 +5762,6 @@ rec {
           "link"
         ];
       };
-      "count-write" = rec {
-        crateName = "count-write";
-        version = "0.1.0";
-        edition = "2018";
-        sha256 = "11bswmgr81s3jagdci1pr6qh9vnz9zsbbf2dqpi260daa2mhgmff";
-        libName = "count_write";
-        authors = [
-          "SOFe <sofe2038@gmail.com>"
-        ];
-        features = {
-          "futures" = [ "futures-io-preview" ];
-          "futures-io-preview" = [ "dep:futures-io-preview" ];
-          "tokio" = [ "tokio-io" ];
-          "tokio-io" = [ "dep:tokio-io" ];
-        };
-      };
       "countme" = rec {
         crateName = "countme";
         version = "3.0.1";
@@ -24239,10 +24223,6 @@ rec {
             ];
           }
           {
-            name = "count-write";
-            packageId = "count-write";
-          }
-          {
             name = "data-encoding";
             packageId = "data-encoding";
           }
@@ -24266,10 +24246,6 @@ rec {
           {
             name = "lru";
             packageId = "lru";
-          }
-          {
-            name = "md-5";
-            packageId = "md-5 0.10.6";
           }
           {
             name = "nix-compat";
@@ -24327,14 +24303,6 @@ rec {
               "macros"
               "std"
             ];
-          }
-          {
-            name = "sha1";
-            packageId = "sha1";
-          }
-          {
-            name = "sha2";
-            packageId = "sha2 0.10.9";
           }
           {
             name = "snix-castore";

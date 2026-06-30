@@ -17,7 +17,6 @@ auto_impl.workspace = true
 bstr.workspace = true
 bytes.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
-count-write.workspace = true
 data-encoding.workspace = true
 ed25519.workspace = true
 futures.workspace = true
@@ -28,9 +27,6 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_with.workspace = true
 serde_qs.workspace = true
-sha1.workspace = true
-sha2.workspace = true
-md-5.workspace = true
 prost.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = [

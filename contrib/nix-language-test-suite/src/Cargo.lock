@@ -999,12 +999,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "count-write"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ced507ab50aa0123e2c54db8b5f44fdfee04b1c93744d69e924307945fe57a85"
-
-[[package]]
 name = "countme"
 version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4184,13 +4178,11 @@ dependencies = [
  "bstr",
  "bytes",
  "clap",
- "count-write",
  "data-encoding",
  "ed25519",
  "futures",
  "hyper-util",
  "lru",
- "md-5 0.10.6",
  "nix-compat",
  "pin-project",
  "pin-project-lite",
@@ -4202,8 +4194,6 @@ dependencies = [
  "serde_json",
  "serde_qs",
  "serde_with",
- "sha1",
- "sha2 0.10.9",
  "snix-castore",
  "snix-tracing",
  "thiserror 2.0.18",

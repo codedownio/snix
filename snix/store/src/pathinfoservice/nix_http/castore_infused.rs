@@ -1,4 +1,7 @@
-use nix_compat::{narinfo::NarInfo, nixhash::NixHash};
+use nix_compat::{
+    narinfo::NarInfo,
+    nixhash::{Sha256, copy_sha256},
+};
 use snix_castore::{
     Node, blobservice::BlobService, directoryservice::DirectoryService,
     proto::parse_infused_nar_path,
@@ -32,8 +35,7 @@ where
         crate::nar::seekable::Reader::new(node.clone(), blob_service, directory_service).await?;
 
     // Render the NAR out into a sink, while hashing and calculating nar_size at the same time.
-    let (actual_nar_hash, actual_nar_size) =
-        nix_compat::hashing::hash::<sha2::Sha256>(&mut r, tokio::io::sink()).await?;
+    let (actual_nar_size, actual_nar_hash) = copy_sha256(&mut r, &mut tokio::io::sink()).await?;
 
     if narinfo.nar_size != actual_nar_size {
         return Err(Error::WrongNARSize {
@@ -41,10 +43,10 @@ where
             actual: actual_nar_size,
         });
     }
-    if narinfo.nar_hash != actual_nar_hash.as_slice() {
+    if narinfo.nar_hash != actual_nar_hash {
         return Err(Error::WrongNARHash {
-            expected: narinfo.nar_hash,
-            actual: actual_nar_hash.into(),
+            expected: narinfo.nar_hash.into(),
+            actual: actual_nar_hash,
         });
     }
 
@@ -65,12 +67,6 @@ pub enum Error {
     #[error("got unexpected NAR size while rendering NAR: {actual}, expected {expected}")]
     WrongNARSize { expected: u64, actual: u64 },
 
-    #[error("got unexpected NAR hash while rendering NAR: {0}, expected {1}",
-        NixHash::Sha256(*actual),
-        NixHash::Sha256(*expected),
-    )]
-    WrongNARHash {
-        expected: [u8; 32],
-        actual: [u8; 32],
-    },
+    #[error("got unexpected NAR hash while rendering NAR: {actual:x}, expected {expected:x}")]
+    WrongNARHash { expected: Sha256, actual: Sha256 },
 }

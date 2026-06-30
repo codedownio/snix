@@ -1,8 +1,7 @@
 use nix_compat::{
     nar::reader::r#async as nar_reader,
-    nixhash::{CAHash, NixHash},
+    nixhash::{CAHash, NixHash, NixHashDigester, Sha256Digester, copy_hashed},
 };
-use sha2::Digest;
 use snix_castore::{
     Node, PathBuf,
     blobservice::BlobService,
@@ -18,8 +17,7 @@ use tokio::{
     sync::mpsc,
     try_join,
 };
-
-use super::hashing_reader::HashingReader;
+use tokio_util::io::InspectReader;
 
 /// Represents errors that can happen during nar ingestion.
 #[derive(Debug, thiserror::Error)]
@@ -52,7 +50,7 @@ where
     BS: BlobService + Clone + 'static,
     DS: DirectoryService,
 {
-    let mut nar_hash = sha2::Sha256::new();
+    let mut nar_hash = Sha256Digester::new();
     let mut nar_size = 0;
 
     // Assemble NarHash and NarSize as we read bytes.
@@ -63,12 +61,14 @@ where
 
     match expected_cahash {
         Some(CAHash::Nar(expected_hash)) => {
-            // We technically don't need the Sha256 hasher as we are already computing the nar hash with the reader above,
+            // We technically don't need the NixHashDigester if the algo is Sha256 as
+            // we are already computing the nar hash with the reader above,
             // but it makes the control flow more uniform and easier to understand.
-            let mut ca_reader = HashingReader::new_with_algo(expected_hash.algo(), &mut r);
+            let mut digester = NixHashDigester::new(expected_hash.algo());
+            let mut ca_reader = InspectReader::new(r, |data| digester.update(data));
             let mut r = tokio::io::BufReader::new(&mut ca_reader);
             let root_node = ingest_nar(blob_service, directory_service, &mut r).await?;
-            let actual_hash = ca_reader.consume();
+            let actual_hash = digester.finalize();
 
             if actual_hash != *expected_hash {
                 return Err(NarIngestionError::HashMismatch {
@@ -83,11 +83,13 @@ where
             let root_node = ingest_nar(blob_service.clone(), directory_service, &mut r).await?;
             match &root_node {
                 Node::File { digest, .. } => match blob_service.open_read(digest).await? {
-                    Some(blob_reader) => {
-                        let mut ca_reader =
-                            HashingReader::new_with_algo(expected_hash.algo(), blob_reader);
-                        tokio::io::copy(&mut ca_reader, &mut tokio::io::empty()).await?;
-                        let actual_hash = ca_reader.consume();
+                    Some(mut blob_reader) => {
+                        let (_, actual_hash) = copy_hashed(
+                            &mut blob_reader,
+                            &mut tokio::io::sink(),
+                            expected_hash.algo(),
+                        )
+                        .await?;
 
                         if actual_hash != *expected_hash {
                             return Err(NarIngestionError::HashMismatch {

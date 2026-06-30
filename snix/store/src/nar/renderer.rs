@@ -1,11 +1,10 @@
-use crate::{pathinfoservice, utils::AsyncIoBridge};
+use crate::pathinfoservice;
 
 use super::{NarCalculationService, RenderError};
-use count_write::CountWrite;
-use nix_compat::nar::writer::r#async as nar_writer;
-use sha2::{Digest, Sha256};
+use nix_compat::{nar::writer::r#async as nar_writer, nixhash::Sha256Digester};
 use snix_castore::{Node, blobservice::BlobService, directoryservice::DirectoryService};
 use tokio::io::{self, AsyncWrite, BufReader};
+use tokio_util::io::InspectWriter;
 use tonic::async_trait;
 use tracing::instrument;
 
@@ -54,20 +53,16 @@ where
     BS: BlobService + Send,
     DS: DirectoryService + Send,
 {
-    let mut h = Sha256::new();
-    let mut cw = CountWrite::from(&mut h);
+    let mut digester = Sha256Digester::new();
+    let mut nar_size = 0;
+    let writer = InspectWriter::new(tokio::io::sink(), |data| {
+        nar_size += data.len() as u64;
+        digester.update(data);
+    });
 
-    write_nar(
-        // The hasher doesn't speak async. It doesn't
-        // actually do any I/O, so it's fine to wrap.
-        AsyncIoBridge(&mut cw),
-        root_node,
-        blob_service,
-        directory_service,
-    )
-    .await?;
+    write_nar(writer, root_node, blob_service, directory_service).await?;
 
-    Ok((cw.count(), h.finalize().into()))
+    Ok((nar_size, digester.finalize().into()))
 }
 
 /// Accepts a [Node] pointing to the root of a (store) path,
