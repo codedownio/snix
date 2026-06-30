@@ -35,7 +35,6 @@ otlp = ["dep:opentelemetry-instrumentation-tower"]
 axum-test = "19.0.0"
 data-encoding.workspace = true
 prost.workspace = true
-sha2.workspace = true
 tracing-test.workspace = true
 
 [package.metadata.docs.rs]

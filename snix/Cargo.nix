@@ -13329,10 +13329,6 @@ rec {
             packageId = "prost";
           }
           {
-            name = "sha2";
-            packageId = "sha2 0.10.9";
-          }
-          {
             name = "tracing-test";
             packageId = "tracing-test";
           }

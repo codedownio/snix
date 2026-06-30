@@ -208,8 +208,7 @@ mod tests {
     use axum::{Router, http::Method};
     use bytes::Bytes;
     use data_encoding::BASE64URL_NOPAD;
-    use nix_compat::nixbase32;
-    use sha2::Digest;
+    use nix_compat::{nixbase32, nixhash::Sha256};
     use snix_castore::{
         blobservice::{BlobService, MemoryBlobService},
         directoryservice::DirectoryService,
@@ -361,7 +360,7 @@ mod tests {
         let (server, _blob_service, _directory_service, _path_info_service) =
             gen_server(Router::new().route("/nar/{nar_str}", axum::routing::put(super::put)));
 
-        let nar_sha256: [u8; 32] = sha2::Sha256::digest(NAR_CONTENTS_SYMLINK.as_slice()).into();
+        let nar_sha256 = Sha256::digest_bytes(NAR_CONTENTS_SYMLINK.as_slice());
 
         let nar_url = format!("/nar/{}.nar.zst", nixbase32::encode(&nar_sha256));
 
@@ -380,7 +379,7 @@ mod tests {
         let (server, blob_service, _directory_service, _path_info_service) =
             gen_server(Router::new().route("/nar/{nar_str}", axum::routing::put(super::put)));
 
-        let nar_sha256: [u8; 32] = sha2::Sha256::digest(NAR_CONTENTS_HELLOWORLD.as_slice()).into();
+        let nar_sha256 = Sha256::digest_bytes(NAR_CONTENTS_HELLOWORLD.as_slice());
         let nar_url = format!("/nar/{}.nar", nixbase32::encode(&nar_sha256));
 
         server
@@ -406,7 +405,7 @@ mod tests {
         let (server, blob_service, directory_service, _path_info_service) =
             gen_server(Router::new().route("/nar/{nar_str}", axum::routing::put(super::put)));
 
-        let nar_sha256: [u8; 32] = sha2::Sha256::digest(NAR_CONTENTS_COMPLICATED.as_slice()).into();
+        let nar_sha256 = Sha256::digest_bytes(NAR_CONTENTS_COMPLICATED.as_slice());
         let nar_url = format!("/nar/{}.nar", nixbase32::encode(&nar_sha256));
 
         server
@@ -438,7 +437,7 @@ mod tests {
                 .route("/nar/{nar_str}", axum::routing::get(super::head_root_nodes)),
         );
 
-        let nar_sha256: [u8; 32] = sha2::Sha256::digest(NAR_CONTENTS_COMPLICATED.as_slice()).into();
+        let nar_sha256 = Sha256::digest_bytes(NAR_CONTENTS_COMPLICATED.as_slice());
         let nar_url = format!("/nar/{}.nar", nixbase32::encode(&nar_sha256));
 
         // upload NAR
