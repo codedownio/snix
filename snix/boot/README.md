@@ -1,153 +1,96 @@
 # snix/boot
 
-This directory provides tooling to boot VMs with /nix/store provided by
-virtiofs.
+This directory provides tooling to boot VMs with `/nix/store` provided by
+virtiofs from a snix-store. Integration tests live in the `tests/` subdirectory.
 
-In the `tests/` subdirectory, there's some integration tests.
-
-## //snix/boot:runVM
-A script spinning up a `snix store virtiofs` daemon, then starting a cloud-
-hypervisor VM.
-
-The cloud-hypervisor VM is using a (semi-)minimal kernel image with virtiofs
-support, and a custom initrd (using u-root). It supports various command line
-options, to be able to do VM tests, act as an interactive shell or exec a binary
-from a closure.
+## //snix/boot:run-snix-vm
+A script spinning up a `snix-store virtiofs` daemon, then booting a cloud-
+hypervisor VM whose `/nix/store` is mounted from it.
 
 It supports the following env vars:
- - `CH_NUM_CPUS=1` controls the number of CPUs available to the VM
- - `CH_MEM_SIZE=512M` controls the memory availabe to the VM
- - `CH_CMDLINE=` controls the kernel cmdline (which can be used to control the
-   boot)
+ - `CH_NUM_CPUS=2` controls the number of CPUs available to the VM
+ - `CH_MEM_SIZE=512M` controls the memory available to the VM
+ - `CH_CMDLINE=` is appended to the kernel cmdline (use it to set `init=`)
+
+The VM boots a NixOS kernel and initrd using systemd-initrd, which mounts
+`/nix/store` from virtiofs. What runs is selected via `init=` on the kernel
+cmdline (set through `CH_CMDLINE`):
+
+ - `init=/nix/store/…-nixos-system-…/init` boots a full NixOS system,
+ - `init=/nix/store/…/bin/some-binary` runs an arbitrary binary (can be a
+   shell too).
+
+The store path referenced by `init=` (and its closure) must be present in the
+snix-store, so it can be served over virtiofs.
 
 ### Usage
-First, ensure you have `snix` in `$PATH`, as that's what `run-snix-vm`
-expects:
-
-Assuming you ran `cargo build --profile=release-with-debug` before, and are in
-the `snix` directory:
+Build `snix-store` and put it on `$PATH` — `run-snix-vm` calls it from there.
+It needs the non-default `virtiofs` feature. From the `snix` directory:
 
 ```
-export PATH=$PATH:$PWD/target/release-with-debug
+cargo build -p snix-cli-store --features virtiofs
+export PATH=$PATH:$PWD/target/debug
 ```
 
-Now, spin up snix-daemon, connecting to some (local) backends:
+Point snix at some (local) stores. Both `snix-store copy` and the `snix-store
+virtiofs` daemon (used by `run-snix-vm`) read these env vars and open the
+services directly:
 
 ```
-snix store daemon \
-  --blob-service-addr=objectstore+file://$PWD/blobs \
-  --directory-service-addr=redb:$PWD/directories.redb \
-  --path-info-service-addr=redb:$PWD/pathinfo.redb &
-```
-
-Copy some data into snix-store (we use `nar-bridge` for this for now):
-
-```
-mg run //snix:nar-bridge &
-rm -Rf ~/.cache/nix; nix copy --to http://localhost:9000\?compression\=none $(mg build //third_party/nixpkgs:hello)
-pkill nar-bridge
-```
-
-By default, the `snix store virtiofs` command used in the `runVM` script
-connects to a running `snix store daemon` via gRPC - in which case you want to
-keep `snix store daemon` running.
-
-In case you want to have `snix store virtiofs` open the stores directly, kill
-`snix store daemon` too, and export the addresses from above:
-
-```
-pkill snix-store
 export BLOB_SERVICE_ADDR=objectstore+file://$PWD/blobs
 export DIRECTORY_SERVICE_ADDR=redb:$PWD/directories.redb
 export PATH_INFO_SERVICE_ADDR=redb:$PWD/pathinfo.redb
 ```
 
-#### Interactive shell
-Run the VM like this:
+Copy paths (and their closures) into the store with `snix-store copy`, which
+ingests the paths from a `nix path-info` reference graph. Define a helper:
 
 ```
-CH_CMDLINE=snix.shell mg run //snix/boot:runVM --
+copy() {
+  nix --extra-experimental-features nix-command \
+    path-info --json --closure-size --recursive "$1" | snix-store copy -
+}
 ```
 
-You'll get dropped into an interactive shell, from which you can do things with
-the store:
+Build the runner once (`-A` resolves against the repo root, one level up):
 
 ```
-  ______      _         ____      _ __
- /_  __/   __(_)  __   /  _/___  (_) /_
-  / / | | / / / |/_/   / // __ \/ / __/
- / /  | |/ / />  <   _/ // / / / / /_
-/_/   |___/_/_/|_|  /___/_/ /_/_/\__/
-
-/# ls -la /nix/store/
-dr-xr-xr-x root 0 0   Jan  1 00:00 .
-dr-xr-xr-x root 0 989 Jan  1 00:00 aw2fw9ag10wr9pf0qk4nk5sxi0q0bn56-glibc-2.37-8
-dr-xr-xr-x root 0 3   Jan  1 00:00 jbwb8d8l28lg9z0xzl784wyb9vlbwss6-xgcc-12.3.0-libgcc
-dr-xr-xr-x root 0 82  Jan  1 00:00 k8ivghpggjrq1n49xp8sj116i4sh8lia-libidn2-2.3.4
-dr-xr-xr-x root 0 141 Jan  1 00:00 mdi7lvrn2mx7rfzv3fdq3v5yw8swiks6-hello-2.12.1
-dr-xr-xr-x root 0 5   Jan  1 00:00 s2gi8pfjszy6rq3ydx0z1vwbbskw994i-libunistring-1.1
+nix-build .. -A snix.boot.run-snix-vm   # creates ./result/bin/run-snix-vm
 ```
-
-Once you exit the shell, the VM will power off itself.
 
 #### Execute a specific binary
-Run the VM like this:
+Copy a binary (and its closure) into the snix-store, then point `init=` at it:
 
 ```
-hello_cmd=$(mg build //third_party/nixpkgs:hello)/bin/hello
-CH_CMDLINE=snix.run=$hello_cmd mg run //snix/boot:runVM --
+hello=$(nix-build --no-out-link .. -A third_party.nixpkgs.hello)
+copy "$hello"
+CH_CMDLINE="init=$hello/bin/hello" ./result/bin/run-snix-vm
 ```
 
-Observe it executing the file (and closure) from the snix-store:
+As `init=` runs as PID 1, the kernel panics once the binary exits, which (with
+`panic=-1`) reboots and powers the VM off.
 
+##### Interactive shell
 ```
-[    0.277486] Run /init as init process
-  ______      _         ____      _ __
- /_  __/   __(_)  __   /  _/___  (_) /_
-  / / | | / / / |/_/   / // __ \/ / __/
- / /  | |/ / />  <   _/ // / / / / /_
-/_/   |___/_/_/|_|  /___/_/ /_/_/\__/
+shell=$(nix-build --no-out-link .. -A third_party.nixpkgs.bashInteractive)
+copy "$shell"
+CH_CMDLINE="init=$shell/bin/sh" ./result/bin/run-snix-vm
+```
 
-Hello, world!
-2023/09/24 21:10:19 Nothing left to be done, powering off.
-[    0.299122] ACPI: PM: Preparing to enter system sleep state S5
-[    0.299422] reboot: Power down
-```
+You'll get a shell with `/nix/store` mounted read-only. `coreutils` isn't on
+`$PATH`, but bash builtins work — e.g. `echo /nix/store/*` lists the store.
 
 #### Boot a NixOS system closure
-It's also possible to boot a system closure. To do this, snix-init honors the
-init= cmdline option, and will `switch_root` to it.
+Booting a full NixOS system works the same way, by pointing `init=` at the
+system's /init.
 
-Make sure to first copy that system closure into snix-store,
-using a similar `nix copy` comamnd as above.
+It currently uses the same initrd and kernel as all other images,
+and does not honor any configuration in your system configuration (FUTUREWORK).
 
+Your NixOS system configuration should import `"${modulesPath}/profiles/qemu-guest.nix"`.
+
+Copy the system closure into the snix-store (as above), then:
 
 ```
-CH_CMDLINE=init=/nix/store/…-nixos-system-…/init mg run //snix/boot:runVM --
+CH_CMDLINE=init=/nix/store/…-nixos-system-…/init ./result/bin/run-snix-vm
 ```
-
-```
-   _____       _         ____      _ __
-  / ___/____  (_)  __   /  _/___  (_) /_
-  \__ \/ __ \/ / |/_/   / // __ \/ / __/
- ___/ / / / / />  <   _/ // / / / / /_
-/____/_/ /_/_/_/|_|  /___/_/ /_/_/\__/
-
-2023/09/24 21:16:43 switch_root: moving mounts
-2023/09/24 21:16:43 switch_root: Skipping "/run" as the dir does not exist
-2023/09/24 21:16:43 switch_root: Changing directory
-2023/09/24 21:16:43 switch_root: Moving /
-2023/09/24 21:16:43 switch_root: Changing root!
-2023/09/24 21:16:43 switch_root: Deleting old /
-2023/09/24 21:16:43 switch_root: executing init
-
-<<< NixOS Stage 2 >>>
-
-[    0.322096] booting system configuration /nix/store/g657sdxinpqfcdv0162zmb8vv9b5c4c5-nixos-system-client-23.11.git.82102fc37da
-running activation script...
-setting up /etc...
-starting systemd...
-[    0.980740] systemd[1]: systemd 253.6 running in system mode (+PAM +AUDIT -SELINUX +APPARMOR +IMA +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 -IDN +IPTC +KMOD +LIBCRYPTSETUP +LIBFDISK +PCRE2 -PWQUALITY +P11KIT -QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD +BPF_FRAMEWORK -XKBCOMMON +UTMP -SYSVINIT default-hierarchy=unified)
-```
-
-This effectively replaces the NixOS Stage 1 entirely.
