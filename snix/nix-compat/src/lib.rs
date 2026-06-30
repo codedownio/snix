@@ -33,9 +33,6 @@ pub mod store_path;
 #[cfg(feature = "serde")]
 pub mod structured_attrs;
 
-#[cfg(feature = "async")]
-pub mod hashing;
-
 #[cfg(feature = "wire")]
 pub mod wire;
 
