@@ -10,9 +10,9 @@ use bstr::BString;
 use bytes::Bytes;
 use futures::Stream;
 use nix_compat::derivation::{Output, OutputName};
+use nix_compat::nixhash::Sha256;
 use nix_compat::store_path::hash_placeholder;
 use nix_compat::{derivation::Derivation, nixbase32, store_path::StorePath};
-use sha2::{Digest, Sha256};
 use snix_build::buildservice::{AdditionalFile, BuildConstraints, BuildRequest, EnvVar};
 use snix_castore::Node;
 use snix_store::path_info::PathInfo;
@@ -287,7 +287,10 @@ fn handle_pass_as_file(
 fn calculate_pass_as_file_env(k: &str) -> (String, String) {
     (
         format!("{k}Path"),
-        format!("/build/.attr-{}", nixbase32::encode(&Sha256::digest(k))),
+        format!(
+            "/build/.attr-{}",
+            nixbase32::encode(&Sha256::digest_bytes(k))
+        ),
     )
 }
 

@@ -1,13 +1,9 @@
 use data_encoding::HEXLOWER;
 use futures::TryStreamExt;
-use md5::{Md5, digest::DynDigest};
 use nix_compat::{
-    hashing::hash,
-    nixhash::{CAHash, CAHashMode, HashAlgo, NixHash},
+    nixhash::{CAHash, CAHashMode, HashAlgo, NixHash, NixHashDigester, copy_buf_hashed},
     store_path::{ParseStorePathError, StorePathRef, build_ca_path},
 };
-use sha1::Sha1;
-use sha2::{Digest, Sha256, Sha512};
 use snix_castore::{Node, blobservice::BlobService, directoryservice::DirectoryService};
 use snix_store::{
     decompression::DecompressedReader,
@@ -354,26 +350,12 @@ where
                 // Copy the contents from the download reader to the blob writer.
                 // Calculate the digest of the file received, depending on the
                 // communicated expected hash algo (or sha256 if none provided).
-                let (actual_hash, blob_size) = match exp_hash
+                let algo = exp_hash
                     .as_ref()
                     .map(NixHash::algo)
-                    .unwrap_or_else(|| HashAlgo::Sha256)
-                {
-                    HashAlgo::Sha256 => hash::<Sha256>(&mut r, &mut blob_writer).await.map(
-                        |(digest, bytes_written)| (NixHash::Sha256(digest.into()), bytes_written),
-                    )?,
-                    HashAlgo::Md5 => hash::<Md5>(&mut r, &mut blob_writer).await.map(
-                        |(digest, bytes_written)| (NixHash::Md5(digest.into()), bytes_written),
-                    )?,
-                    HashAlgo::Sha1 => hash::<Sha1>(&mut r, &mut blob_writer).await.map(
-                        |(digest, bytes_written)| (NixHash::Sha1(digest.into()), bytes_written),
-                    )?,
-                    HashAlgo::Sha512 => hash::<Sha512>(&mut r, &mut blob_writer).await.map(
-                        |(digest, bytes_written)| {
-                            (NixHash::Sha512(Box::new(digest.into())), bytes_written)
-                        },
-                    )?,
-                };
+                    .unwrap_or_else(|| HashAlgo::Sha256);
+                let (blob_size, actual_hash) =
+                    copy_buf_hashed(&mut r, &mut blob_writer, algo).await?;
 
                 if let Some(exp_hash) = exp_hash
                     && exp_hash != actual_hash
@@ -500,17 +482,10 @@ where
                 // FUTUREWORK: make opportunistic use of Content-Length header?
 
                 let w = tokio::io::sink();
-                // Construct the hash function.
-                let mut hasher: Box<dyn DynDigest + Send> = match exp_hash.algo() {
-                    HashAlgo::Md5 => Box::new(Md5::new()),
-                    HashAlgo::Sha1 => Box::new(Sha1::new()),
-                    HashAlgo::Sha256 => Box::new(Sha256::new()),
-                    HashAlgo::Sha512 => Box::new(Sha512::new()),
-                };
-
+                let mut digester = NixHashDigester::new(exp_hash.algo());
                 let mut nar_size: u64 = 0;
                 let mut w = InspectWriter::new(w, |d| {
-                    hasher.update(d);
+                    digester.update(d);
                     nar_size += d.len() as u64;
                 });
 
@@ -530,22 +505,7 @@ where
                 }
 
                 // finalize the hasher.
-                let actual_hash = {
-                    match exp_hash.algo() {
-                        HashAlgo::Md5 => {
-                            NixHash::Md5(hasher.finalize().to_vec().try_into().unwrap())
-                        }
-                        HashAlgo::Sha1 => {
-                            NixHash::Sha1(hasher.finalize().to_vec().try_into().unwrap())
-                        }
-                        HashAlgo::Sha256 => {
-                            NixHash::Sha256(hasher.finalize().to_vec().try_into().unwrap())
-                        }
-                        HashAlgo::Sha512 => {
-                            NixHash::Sha512(hasher.finalize().to_vec().try_into().unwrap())
-                        }
-                    }
-                };
+                let actual_hash = digester.finalize();
 
                 if exp_hash != actual_hash {
                     return Err(FetcherError::HashMismatch {
