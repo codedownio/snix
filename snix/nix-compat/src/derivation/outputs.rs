@@ -319,7 +319,7 @@ impl Outputs {
     pub fn calculate_output_paths(
         &mut self,
         drv_name: &str,
-        hash_derivation_modulo: &[u8; 32],
+        hash_derivation_modulo: &Sha256,
     ) -> Result<(), OutputsError> {
         match &mut self.0 {
             OutputsInner::Single(output) => {
@@ -343,11 +343,7 @@ impl Outputs {
                         false,
                     )
                 } else {
-                    store_path::build_output_path(
-                        &name,
-                        &Sha256::new(*hash_derivation_modulo),
-                        &OutputName::out(),
-                    )
+                    store_path::build_output_path(&name, hash_derivation_modulo, &OutputName::out())
                 }
                 .map_err(|e| OutputsError::InvalidOutputDerivationPath(name.to_string(), e))?;
 
@@ -368,12 +364,11 @@ impl Outputs {
                     };
 
                     // use [build_output_path] with [hash_derivation_modulo].
-                    let store_path = store_path::build_output_path(
-                        &name,
-                        &Sha256::new(*hash_derivation_modulo),
-                        output_name,
-                    )
-                    .map_err(|e| OutputsError::InvalidOutputDerivationPath(name.to_string(), e))?;
+                    let store_path =
+                        store_path::build_output_path(&name, hash_derivation_modulo, output_name)
+                            .map_err(|e| {
+                            OutputsError::InvalidOutputDerivationPath(name.to_string(), e)
+                        })?;
 
                     output.path = Some(store_path.to_owned());
                 }

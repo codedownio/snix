@@ -1,4 +1,4 @@
-use crate::nixhash::Sha256Digester;
+use crate::nixhash::{Sha256, Sha256Digester};
 use crate::store_path::{self, StorePath, StorePathRef};
 use bstr::BString;
 #[cfg(feature = "serde")]
@@ -104,7 +104,7 @@ impl Derivation {
     /// it's not.
     // NOTE: this is called twice, once when constructing out_output.path is None,
     // it'll later get populated with the path.
-    pub fn fod_digest(&self) -> Option<[u8; 32]> {
+    pub fn fod_digest(&self) -> Option<Sha256> {
         if self.outputs.len() != 1 {
             return None;
         }
@@ -112,14 +112,11 @@ impl Derivation {
         let out_output = self.outputs.get(&OutputName::out())?;
         let out_output_hash = out_output.output_hash.as_ref()?;
 
-        Some(
-            store_path::fod_digest(
-                out_output_hash.mode == OutputHashMode::Recursive,
-                &out_output_hash.hash,
-                out_output.path.as_ref().map(|sp| sp.as_ref()),
-            )
-            .into(),
-        )
+        Some(store_path::fod_digest(
+            out_output_hash.mode == OutputHashMode::Recursive,
+            &out_output_hash.hash,
+            out_output.path.as_ref().map(|sp| sp.as_ref()),
+        ))
     }
 
     /// Calculates the hash of a derivation modulo fixed-output subderivations.
@@ -139,9 +136,9 @@ impl Derivation {
     /// input derivations, by their [StorePathRef].
     /// It will only be called in case the derivation is not a fixed-output
     /// derivation.
-    pub fn hash_derivation_modulo<F>(&self, fn_lookup_hash_derivation_modulo: F) -> [u8; 32]
+    pub fn hash_derivation_modulo<F>(&self, fn_lookup_hash_derivation_modulo: F) -> Sha256
     where
-        F: Fn(&StorePathRef) -> [u8; 32],
+        F: Fn(&StorePathRef) -> Sha256,
     {
         // Fixed-output derivations return a fixed hash.
         // Non-Fixed-output derivations return the sha256 digest of the ATerm
@@ -167,7 +164,7 @@ impl Derivation {
             self.serialize_with_replacements(&mut hasher, replacements.into_iter())
                 .unwrap();
 
-            hasher.finalize().into()
+            hasher.finalize()
         })
     }
 
@@ -192,7 +189,7 @@ impl Derivation {
     pub fn calculate_output_paths(
         &mut self,
         drv_name: &str,
-        hash_derivation_modulo: &[u8; 32],
+        hash_derivation_modulo: &Sha256,
     ) -> Result<(), DerivationError> {
         self.outputs
             .calculate_output_paths(drv_name, hash_derivation_modulo)?;

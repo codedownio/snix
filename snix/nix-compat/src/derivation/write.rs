@@ -5,9 +5,11 @@
 
 use super::output::Output;
 use crate::derivation::OutputName;
+use crate::nixhash::Sha256;
 use crate::store_path::{StorePath, StorePathRef};
 use crate::{aterm::write_escaped, derivation::Derivation};
 use data_encoding::HEXLOWER;
+use smol_str::format_smolstr;
 
 use std::{collections::BTreeSet, io, io::Error, io::Write};
 
@@ -66,9 +68,9 @@ impl AtermWriteable for [u8] {
     }
 }
 
-impl AtermWriteable for [u8; 32] {
+impl AtermWriteable for Sha256 {
     fn aterm_write(&self, writer: &mut impl Write) -> std::io::Result<()> {
-        write_field(writer, HEXLOWER.encode(self), false)
+        write_field(writer, format_smolstr!("{self:x}").as_bytes(), false)
     }
 }
 

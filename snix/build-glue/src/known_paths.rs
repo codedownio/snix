@@ -11,6 +11,7 @@
 use hashbrown::HashMap;
 use nix_compat::{
     derivation::Derivation,
+    nixhash::Sha256,
     store_path::{ParseStorePathError, StorePath, StorePathRef},
 };
 
@@ -25,7 +26,7 @@ pub struct KnownPaths {
     ///
     /// Keys are derivation paths, values are a tuple of the "hash derivation
     /// modulo" and the Derivation struct itself.
-    derivations: HashMap<StorePath, ([u8; 32], Derivation)>,
+    derivations: HashMap<StorePath, (Sha256, Derivation)>,
 
     /// A map from output path to (one) drv path.
     /// Note that in the case of FODs, multiple drvs can produce the same output
@@ -38,7 +39,7 @@ pub struct KnownPaths {
 
 impl KnownPaths {
     /// Fetch the opaque "hash derivation modulo" for a given derivation path.
-    pub fn get_hash_derivation_modulo(&self, drv_path: &StorePathRef) -> Option<&[u8; 32]> {
+    pub fn get_hash_derivation_modulo(&self, drv_path: &StorePathRef) -> Option<&Sha256> {
         self.derivations
             .get(drv_path)
             .map(|(hash_derivation_modulo, _derivation)| hash_derivation_modulo)
@@ -146,7 +147,12 @@ mod tests {
     use std::sync::LazyLock;
 
     use hex_literal::hex;
-    use nix_compat::{derivation::Derivation, nixbase32, nixhash::NixHash, store_path::StorePath};
+    use nix_compat::{
+        derivation::Derivation,
+        nixbase32,
+        nixhash::{NixHash, Sha256},
+        store_path::StorePath,
+    };
     use url::Url;
 
     use super::KnownPaths;
@@ -248,9 +254,9 @@ mod tests {
 
         // It should be possible to get the hash derivation modulo.
         assert_eq!(
-            Some(&hex!(
+            Some(&Sha256::new(hex!(
                 "c79aebd0ce3269393d4a1fde2cbd1d975d879b40f0bf40a48f550edc107fd5df"
-            )),
+            ))),
             known_paths.get_hash_derivation_modulo(&BAR_DRV_PATH.as_ref())
         );
 
@@ -263,9 +269,9 @@ mod tests {
             known_paths.get_drv_by_drvpath(&FOO_DRV_PATH.as_ref())
         );
         assert_eq!(
-            Some(&hex!(
+            Some(&Sha256::new(hex!(
                 "af030d36d63d3d7f56a71adaba26b36f5fa1f9847da5eed953ed62e18192762f"
-            )),
+            ))),
             known_paths.get_hash_derivation_modulo(&FOO_DRV_PATH.as_ref())
         );
 

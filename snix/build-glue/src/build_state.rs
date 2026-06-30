@@ -184,7 +184,7 @@ impl BuildState {
 
                         // precompute the `ca` field in the PathInfo, so we can send off drv.
                         let mut ca = drv.fod_digest().map(|fod_digest| {
-                            CAHash::Nar(nix_compat::nixhash::NixHash::Sha256(fod_digest))
+                            CAHash::Nar(nix_compat::nixhash::NixHash::Sha256(fod_digest.into()))
                         });
 
                         // synthesize the build request.
