@@ -142,21 +142,19 @@ impl EvalIO for SnixStoreIO {
     #[instrument(skip(self), err)]
     fn open(&self, path: &std::path::Path) -> io::Result<Box<dyn io::Read>> {
         if let Ok((store_path, sub_path)) = parse_store_and_sub_path(path) {
-            if let Some(path_info) = self
-                .tokio_handle
-                .block_on(async { self.store_path_to_path_info(&store_path, sub_path).await })?
-            {
-                // depending on the node type, treat open differently
-                match path_info.node {
-                    Node::Directory { .. } => {
-                        // This would normally be a io::ErrorKind::IsADirectory (still unstable)
-                        Err(io::Error::new(
-                            io::ErrorKind::Unsupported,
-                            format!("tried to open directory at {path:?}"),
-                        ))
-                    }
-                    Node::File { digest, .. } => {
-                        self.tokio_handle.block_on(async {
+            self.tokio_handle.block_on(async {
+                if let Some(path_info) = self.store_path_to_path_info(&store_path, sub_path).await?
+                {
+                    // depending on the node type, treat open differently
+                    match path_info.node {
+                        Node::Directory { .. } => {
+                            // This would normally be a io::ErrorKind::IsADirectory (still unstable)
+                            Err(io::Error::new(
+                                io::ErrorKind::Unsupported,
+                                format!("tried to open directory at {path:?}"),
+                            ))
+                        }
+                        Node::File { digest, .. } => {
                             let resp = self
                                 .build_state
                                 .blob_service
@@ -180,18 +178,18 @@ impl EvalIO for SnixStoreIO {
                                     ))
                                 }
                             }
-                        })
+                        }
+                        Node::Symlink { .. } => Err(io::Error::new(
+                            io::ErrorKind::Unsupported,
+                            "open for symlinks is unsupported",
+                        ))?,
                     }
-                    Node::Symlink { .. } => Err(io::Error::new(
-                        io::ErrorKind::Unsupported,
-                        "open for symlinks is unsupported",
-                    ))?,
+                } else {
+                    // As snix-store doesn't manage /nix/store on the filesystem,
+                    // we still need to also ask self.std_io here.
+                    self.std_io.open(path)
                 }
-            } else {
-                // As snix-store doesn't manage /nix/store on the filesystem,
-                // we still need to also ask self.std_io here.
-                self.std_io.open(path)
-            }
+            })
         } else {
             // The store path is no store path, so do regular StdIO.
             self.std_io.open(path)
@@ -217,57 +215,54 @@ impl EvalIO for SnixStoreIO {
     #[instrument(skip(self), ret(level = Level::TRACE), err)]
     fn read_dir(&self, path: &std::path::Path) -> io::Result<Vec<(bytes::Bytes, FileType)>> {
         if let Ok((store_path, sub_path)) = parse_store_and_sub_path(path) {
-            if let Some(path_info) = self
-                .tokio_handle
-                .block_on(async { self.store_path_to_path_info(&store_path, sub_path).await })?
-            {
-                match path_info.node {
-                    Node::Directory { digest, .. } => {
-                        // fetch the Directory itself.
-                        let directory = self
-                            .tokio_handle
-                            .block_on(async {
-                                self.build_state
-                                    .directory_service
-                                    .as_ref()
-                                    .get(&digest)
-                                    .await
-                            })
-                            .map_err(std::io::Error::other)?
-                            .ok_or_else(|| {
-                                // If we didn't get the directory node that's linked, that's a store inconsistency!
-                                error!(
-                                    directory.digest = %digest,
-                                    path = ?path,
-                                    "directory not found",
-                                );
-                                io::Error::new(
-                                    io::ErrorKind::NotFound,
-                                    format!("directory {digest} does not exist"),
-                                )
-                            })?;
+            self.tokio_handle.block_on(async {
+                if let Some(path_info) = self.store_path_to_path_info(&store_path, sub_path).await?
+                {
+                    match path_info.node {
+                        Node::Directory { digest, .. } => {
+                            // fetch the Directory itself.
+                            let directory = self
+                                .build_state
+                                .directory_service
+                                .as_ref()
+                                .get(&digest)
+                                .await
+                                .map_err(std::io::Error::other)?
+                                .ok_or_else(|| {
+                                    // If we didn't get the directory node that's linked, that's a store inconsistency!
+                                    error!(
+                                        directory.digest = %digest,
+                                        path = ?path,
+                                        "directory not found",
+                                    );
+                                    io::Error::new(
+                                        io::ErrorKind::NotFound,
+                                        format!("directory {digest} does not exist"),
+                                    )
+                                })?;
 
-                        // construct children from nodes
-                        Ok(directory
-                            .into_nodes()
-                            .map(|(name, node)| (name.into(), node_get_type(&node)))
-                            .collect())
-                    }
-                    Node::File { .. } => {
-                        // This would normally be a io::ErrorKind::NotADirectory (still unstable)
-                        Err(io::Error::new(
+                            // construct children from nodes
+                            Ok(directory
+                                .into_nodes()
+                                .map(|(name, node)| (name.into(), node_get_type(&node)))
+                                .collect())
+                        }
+                        Node::File { .. } => {
+                            // This would normally be a io::ErrorKind::NotADirectory (still unstable)
+                            Err(io::Error::new(
+                                io::ErrorKind::Unsupported,
+                                "tried to readdir path {:?}, which is a file",
+                            ))?
+                        }
+                        Node::Symlink { .. } => Err(io::Error::new(
                             io::ErrorKind::Unsupported,
-                            "tried to readdir path {:?}, which is a file",
-                        ))?
+                            "read_dir for symlinks is unsupported",
+                        ))?,
                     }
-                    Node::Symlink { .. } => Err(io::Error::new(
-                        io::ErrorKind::Unsupported,
-                        "read_dir for symlinks is unsupported",
-                    ))?,
+                } else {
+                    self.std_io.read_dir(path)
                 }
-            } else {
-                self.std_io.read_dir(path)
-            }
+            })
         } else {
             self.std_io.read_dir(path)
         }
