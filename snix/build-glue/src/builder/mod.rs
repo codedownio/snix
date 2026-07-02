@@ -95,7 +95,7 @@ where
 
 /// Takes a [Derivation] and turns it into a [snix_build::buildservice::BuildRequest].
 /// It assumes the Derivation has been validated, and all referenced output paths are present in `inputs`.
-pub(crate) fn derivation_into_build_request(
+pub fn derivation_into_build_request(
     mut derivation: Derivation,
     inputs: &BTreeMap<StorePath, Node>,
 ) -> std::io::Result<BuildRequest> {
