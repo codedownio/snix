@@ -965,3 +965,26 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod node_to_fuse_type_tests {
+    use super::node_to_fuse_type;
+    use crate::{Node, fixtures::DIRECTORY_A};
+
+    /// Regression: the FUSE `DirEntry.type_` (kernel `dirent.d_type`) must be a `DT_*` value, not
+    /// the `S_IF*` st_mode bits. Returning `S_IFDIR` (0o040000) left every entry's `d_type` byte 0
+    /// == `DT_UNKNOWN`, which made `lndir` emit whole-dir symlinks (broken `symlinkJoin`/`buildEnv`
+    /// deep merge). The existing fs tests only `lstat` (getattr), which masks this.
+    #[test]
+    fn returns_dt_star_not_s_if_star() {
+        let dir = Node::Directory { digest: DIRECTORY_A.digest(), size: DIRECTORY_A.size() };
+        let file = Node::File { digest: DIRECTORY_A.digest(), size: 0, executable: false };
+        let symlink = Node::Symlink { target: "target".try_into().unwrap() };
+
+        assert_eq!(node_to_fuse_type(&dir), libc::DT_DIR as u32);
+        assert_eq!(node_to_fuse_type(&file), libc::DT_REG as u32);
+        assert_eq!(node_to_fuse_type(&symlink), libc::DT_LNK as u32);
+        // guard the specific regression: never the st_mode type bits
+        assert_ne!(node_to_fuse_type(&dir), libc::S_IFDIR);
+    }
+}
