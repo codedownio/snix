@@ -102,7 +102,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .fod_digest()
         .map(|fod_digest| CAHash::Nar(NixHash::Sha256(fod_digest)));
 
-    let build_request = derivation_into_build_request(&drv, &resolved_inputs)?;
+    let build_request = derivation_into_build_request(drv, &resolved_inputs)?;
 
     // Map refscan-needle indexes back to store paths: outputs first, then the input closure
     // (same order derivation_into_build_request assembles refscan_needles).
