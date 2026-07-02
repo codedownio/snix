@@ -348,19 +348,22 @@ fn attr_to_fuse_entry(attr: Attr) -> Entry {
     }
 }
 
-/// Returns the u32 fuse type
+/// Returns the readdir `d_type` (a `libc::DT_*` value) for a node.
+///
+/// This is the readdir/getdents `d_type`, NOT the `st_mode` file-type bits: the FUSE
+/// `DirEntry.type_` field (and the kernel `dirent.d_type` it feeds) expects `DT_*`, not `S_IF*`.
+/// Returning `S_IFDIR` (0o040000) here left every entry's low byte 0 == `DT_UNKNOWN`, which breaks
+/// tools that trust `d_type` without an `lstat` fallback -- e.g. `lndir`, so `symlinkJoin`/`buildEnv`
+/// builds produced whole-directory symlinks instead of a deep per-file merge. (getattr/lookup still
+/// report the correct `S_IFDIR|…` mode via inode_data_to_attr; only the readdir d_type was wrong.)
 fn node_to_fuse_type(node: &Node) -> u32 {
-    #[allow(clippy::let_and_return)]
     let ty = match node {
-        Node::Directory { .. } => libc::S_IFDIR,
-        Node::File { .. } => libc::S_IFREG,
-        Node::Symlink { .. } => libc::S_IFLNK,
+        Node::Directory { .. } => libc::DT_DIR,
+        Node::File { .. } => libc::DT_REG,
+        Node::Symlink { .. } => libc::DT_LNK,
     };
-    // libc::S_IFDIR is u32 on Linux and u16 on MacOS
-    #[cfg(target_os = "macos")]
-    let ty = ty as u32;
-
-    ty
+    // libc::DT_* are u8 on both Linux and macOS.
+    ty as u32
 }
 
 const XATTR_NAME_DIRECTORY_DIGEST: &[u8] = b"user.snix.castore.directory.digest";
