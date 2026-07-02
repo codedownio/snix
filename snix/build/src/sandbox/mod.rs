@@ -88,6 +88,15 @@ pub struct SandboxSpec {
     /// Whether to allow network access inside the sandbox.
     #[builder(default)]
     allow_network: bool,
+
+    /// Optional: a host path to use as the read-only inputs source (the overlay lower for
+    /// [InputsProvider::inputs_dir]) instead of the FUSE the `with_inputs` provider would mount.
+    /// This lets the build read its inputs through an already-mounted, cached whole-store mount
+    /// (e.g. nox-mount) rather than spinning up a per-build castore FUSE — bwrap binds it inside
+    /// its own namespace, so it works unprivileged. When set, the `with_inputs` provider is still
+    /// consulted for its `inputs_dir`, but its mount closure can be a no-op.
+    #[builder(default)]
+    external_inputs: Option<PathBuf>,
 }
 
 impl SandboxSpec {
@@ -125,6 +134,10 @@ impl SandboxSpec {
 
     pub fn inputs_provider(&self) -> &InputsProvider {
         &self.with_inputs
+    }
+
+    pub fn external_inputs(&self) -> Option<&Path> {
+        self.external_inputs.as_deref()
     }
 }
 
