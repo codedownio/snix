@@ -313,6 +313,24 @@ where
         // libc::S_IFREG, libc::S_IFLNK & libc::S_IFDIR are u32 on Linux and u16 on MacOS
         #[cfg(target_os = "macos")]
         let mode = mode as u32;
+        // st_nlink. For a directory, tools rely on the traditional Unix semantics
+        // `nlink == 2 + number_of_subdirectories` (self `.`, parent `..`, and each subdir's `..`)
+        // to decide whether to bother recursing. Reporting 0 (the old `..Default::default()`) made
+        // `lndir` (used by nixpkgs `symlinkJoin`/`buildEnv`) treat every directory as having no
+        // subdirs and symlink whole directories instead of doing a deep per-file merge. For a
+        // populated directory we know the subdir count; for a still-sparse one we report 1, which
+        // `lndir` treats as "link count unknown" (`n_dirs == 1 -> INT_MAX`, i.e. check every entry)
+        // and `find` falls back to statting. Regular files and symlinks get 1.
+        let nlink = match inode_data {
+            InodeData::Directory(DirectoryInodeData::Populated(_, children)) => {
+                2 + children
+                    .iter()
+                    .filter(|(_, _, node)| matches!(node, Node::Directory { .. }))
+                    .count() as u32
+            }
+            InodeData::Directory(DirectoryInodeData::Sparse(_, _)) => 1,
+            InodeData::Regular(..) | InodeData::Symlink(_) => 1,
+        };
         let mut attr = Attr {
             ino,
             // FUTUREWORK: play with this numbers, as it affects read sizes for client applications.
@@ -326,6 +344,7 @@ where
                 }
             },
             mode,
+            nlink,
             mtime: 1, // Everything in /nix/store must have timestamp "1".
             ..Default::default()
         };
