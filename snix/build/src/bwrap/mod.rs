@@ -162,9 +162,19 @@ impl Bwrap {
 
         let host_inputs_dir = spec.host_workdir().join("host_inputs_dir");
         fs::create_dir_all(&host_inputs_dir)?;
+        // Source dir bound read-only into the sandbox at inputs_dir (and used as the overlay lower
+        // when inputs_dir is also a scratch). Normally this is the FUSE the provider mounts at
+        // host_inputs_dir; when an external whole-store mount is configured
+        // (SandboxSpec::external_inputs, e.g. nox-mount) we bind that instead, so the build reads
+        // its inputs through that cached mount rather than a fresh per-build castore FUSE. bwrap
+        // performs the bind inside its own user+mount namespace, so this needs no extra privilege.
+        let inputs_src: OsString = match spec.external_inputs() {
+            Some(ext) => ext.into(),
+            None => Path::new("/").join(&host_inputs_dir).into(),
+        };
         args.extend([
             "--ro-bind".into(),
-            Path::new("/").join(&host_inputs_dir).into(),
+            inputs_src.clone(),
             Path::new("/")
                 .join(spec.inputs_provider().inputs_dir())
                 .into(),
@@ -177,7 +187,7 @@ impl Bwrap {
                 fs::create_dir_all(&overlay_workdir)?;
                 args.extend([
                     "--overlay-src".into(),
-                    OsString::from(&host_inputs_dir),
+                    inputs_src.clone(),
                     "--overlay".into(),
                     scratch_path.into(),
                     overlay_workdir.into(),

@@ -78,10 +78,18 @@ where
                 Err(std::io::Error::other("bwap needs a bundle dir as path"))?
             }
 
+            // Optional `?external-store=<path>`: bind that already-mounted whole-store dir (e.g.
+            // nox-mount) as the build inputs instead of a per-build castore FUSE.
+            let external_store = url
+                .query_pairs()
+                .find(|(k, _)| k == "external-store")
+                .map(|(_, v)| std::path::PathBuf::from(v.into_owned()));
+
             Arc::new(BubblewrapBuildService::new(
                 url.path().into(),
                 blob_service,
                 directory_service,
+                external_store,
             ))
         }
         scheme => {
