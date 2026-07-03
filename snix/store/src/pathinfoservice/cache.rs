@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use futures::{TryStreamExt, stream::BoxStream};
+use futures::stream::BoxStream;
 use nix_compat::nixbase32;
 use snix_castore::composition::{CompositionContext, ServiceBuilder};
 use tonic::async_trait;
@@ -68,12 +68,15 @@ where
             || self.far.has(digest).await.map_err(Error::FarGet)?)
     }
 
-    async fn put(&self, _path_info: PathInfo) -> Result<PathInfo, pathinfoservice::Error> {
-        Err(Error::Unimplemented)?
+    async fn put(&self, path_info: PathInfo) -> Result<PathInfo, pathinfoservice::Error> {
+        // Write through to near, so the cache can serve as the root store of a
+        // writable composition (e.g. local store fronted by a substituter).
+        Ok(self.near.put(path_info).await.map_err(Error::NearPut)?)
     }
 
     fn list(&self) -> BoxStream<'static, Result<PathInfo, pathinfoservice::Error>> {
-        Box::pin(tokio_stream::once(Err(Error::Unimplemented)).err_into())
+        // Only list what's locally present; enumerating far would walk the substituter.
+        self.near.list()
     }
 }
 
@@ -95,9 +98,6 @@ pub enum Error {
     NearPut(#[source] pathinfoservice::Error),
     #[error("getting from far: {0}")]
     FarGet(#[source] pathinfoservice::Error),
-
-    #[error("puts are unimplemented")]
-    Unimplemented,
 }
 
 impl TryFrom<url::Url> for CacheConfig {
