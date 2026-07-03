@@ -139,6 +139,14 @@ where
 
         let outcome = Bwrap::initialize(spec)?.run().await?;
 
+        // Always persist the sandbox transcript, success or failure — a 0-exit build can still be
+        // silently wrong (e.g. stdenv phases no-op'ing), and this is the only record of what ran.
+        let stdout_log = sandbox_path.join("build-stdout.log");
+        let stderr_log = sandbox_path.join("build-stderr.log");
+        let _ = std::fs::write(&stdout_log, &outcome.output().stdout);
+        let _ = std::fs::write(&stderr_log, &outcome.output().stderr);
+        info!(stdout_log=%stdout_log.display(), stderr_log=%stderr_log.display(), exit_code=%outcome.output().status, "build finished");
+
         if !outcome.output().status.success() {
             let stdout = BStr::new(&outcome.output().stdout);
             let stderr = BStr::new(&outcome.output().stderr);
