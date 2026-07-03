@@ -193,10 +193,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         path_info_service.put(path_info).await?;
 
         println!(
-            "OUTPUT /nix/store/{}  ({} refs, nar_size={})",
+            "OUTPUT /nix/store/{}  ({} refs, nar_size={}, nar_sha256={})",
             output_path,
             references.len(),
-            nar_size
+            nar_size,
+            data_encoding::HEXLOWER.encode(&nar_sha256)
         );
     }
 
