@@ -34,6 +34,9 @@ pub struct BubblewrapBuildService<BS, DS> {
     /// request's inputs. When set, the sandbox reads inputs through this mount (and its cache).
     external_store: Option<PathBuf>,
 
+    /// Whether the sandbox unshares a user namespace (see [SandboxSpec::userns]).
+    userns: bool,
+
     // semaphore to track number of concurrently running builds.
     // this is necessary, as otherwise we very quickly run out of open file handles.
     concurrent_builds: tokio::sync::Semaphore,
@@ -44,6 +47,7 @@ impl<BS, DS> BubblewrapBuildService<BS, DS> {
         blob_service: BS,
         directory_service: DS,
         external_store: Option<PathBuf>,
+        userns: bool,
     ) -> Self {
         // We map root inside the container to the uid/gid this is running at,
         // and allocate one for uid 1000 into the container from the range we
@@ -54,6 +58,7 @@ impl<BS, DS> BubblewrapBuildService<BS, DS> {
             blob_service,
             directory_service,
             external_store,
+            userns,
             concurrent_builds: tokio::sync::Semaphore::new(2),
         }
     }
@@ -129,6 +134,7 @@ where
                     .constraints
                     .contains(&BuildConstraints::NetworkAccess),
             )
+            .userns(self.userns)
             .provide_shell(
                 request
                     .constraints

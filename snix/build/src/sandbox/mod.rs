@@ -105,6 +105,14 @@ pub struct SandboxSpec {
     /// nix-style input purity. Empty = bind the whole `external_inputs` mount (whole-store mode).
     #[builder(default)]
     external_input_names: Vec<PathBuf>,
+
+    /// Whether to unshare a user namespace (and become uid 1000/gid 100 inside it).
+    /// Disable when already running as root with CAP_SYS_ADMIN inside a container whose /proc is
+    /// masked (e.g. a non-privileged k8s pod): a fresh procfs can't be mounted from a nested user
+    /// namespace there, while the initial namespace mounts it fine — the build then runs as root,
+    /// like CppNix with an empty build-users-group.
+    #[builder(default = true)]
+    userns: bool,
 }
 
 impl SandboxSpec {
@@ -150,6 +158,10 @@ impl SandboxSpec {
 
     pub fn external_input_names(&self) -> &[PathBuf] {
         &self.external_input_names
+    }
+
+    pub fn userns(&self) -> bool {
+        self.userns
     }
 }
 
