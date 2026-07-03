@@ -97,6 +97,14 @@ pub struct SandboxSpec {
     /// consulted for its `inputs_dir`, but its mount closure can be a no-op.
     #[builder(default)]
     external_inputs: Option<PathBuf>,
+
+    /// With [Self::external_inputs] set, the declared input paths (relative to `inputs_dir`) to
+    /// bind individually, read-only, from that mount — instead of binding the whole store as an
+    /// overlay lower. Binding only declared inputs keeps the *output* path (which may already exist
+    /// in the store) out of the sandbox's store view, so the build creates it fresh; it also gives
+    /// nix-style input purity. Empty = bind the whole `external_inputs` mount (whole-store mode).
+    #[builder(default)]
+    external_input_names: Vec<PathBuf>,
 }
 
 impl SandboxSpec {
@@ -138,6 +146,10 @@ impl SandboxSpec {
 
     pub fn external_inputs(&self) -> Option<&Path> {
         self.external_inputs.as_deref()
+    }
+
+    pub fn external_input_names(&self) -> &[PathBuf] {
+        &self.external_input_names
     }
 }
 

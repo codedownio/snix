@@ -80,6 +80,19 @@ where
         let directory_service = self.directory_service.clone();
         let external = self.external_store.is_some();
 
+        // In external mode, bind only the declared inputs (the .drv's input closure) from the mount,
+        // so the output path is never in the sandbox's store view. Keys are the store-path basenames.
+        let external_input_names: Vec<std::path::PathBuf> = if external {
+            use std::os::unix::ffi::OsStrExt;
+            request
+                .inputs
+                .keys()
+                .map(|k| std::path::PathBuf::from(std::ffi::OsStr::from_bytes(k.as_ref())))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         let spec = SandboxSpec::builder()
             .host_workdir(sandbox_path)
             .sandbox_workdir(request.working_dir)
@@ -90,6 +103,7 @@ where
             // #2: when an external whole-store mount is configured, read inputs through it (bwrap
             // binds it) instead of a per-build castore FUSE.
             .external_inputs(self.external_store.clone())
+            .external_input_names(external_input_names)
             .with_inputs(request.inputs_dir, move |path| -> std::io::Result<Box<dyn crate::sandbox::InputsGuard>> {
                 if external {
                     // Inputs are served by the external mount (bound by bwrap); no FUSE to mount.
