@@ -86,18 +86,70 @@ async fn missing_paths(
     Ok(missing)
 }
 
+/// Is `path`'s full reference closure present in castore? Castore PathInfo presence does NOT
+/// imply the closure invariant CppNix's "valid" gives (nox stores runtime closures; copies may
+/// exclude to-be-built outputs), so a present output can still have dangling references.
+/// `complete` memoizes paths whose closure was verified.
+async fn closure_complete(
+    path: &StorePath<String>,
+    path_info_service: &Arc<dyn PathInfoService>,
+    complete: &mut HashSet<StorePath<String>>,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    if complete.contains(path) {
+        return Ok(true);
+    }
+    let mut visited: HashSet<StorePath<String>> = HashSet::new();
+    let mut frontier: Vec<StorePath<String>> = vec![path.clone()];
+    while !frontier.is_empty() {
+        let to_fetch: Vec<StorePath<String>> = frontier
+            .into_iter()
+            .filter(|sp| !complete.contains(sp) && visited.insert(sp.clone()))
+            .collect();
+        let infos: Vec<(StorePath<String>, Option<PathInfo>)> =
+            futures::stream::iter(to_fetch.into_iter())
+                .map(|sp| {
+                    let pis = path_info_service.clone();
+                    async move {
+                        let info = pis.get(*sp.digest()).await.map_err(std::io::Error::other)?;
+                        Ok::<_, std::io::Error>((sp, info))
+                    }
+                })
+                .buffer_unordered(64)
+                .try_collect()
+                .await?;
+        let mut next = Vec::new();
+        for (sp, info) in infos {
+            let Some(info) = info else {
+                return Ok(false); // dangling reference somewhere below `path`
+            };
+            for r in &info.references {
+                if *r != sp && !visited.contains(r) {
+                    next.push(r.clone());
+                }
+            }
+        }
+        frontier = next;
+    }
+    complete.extend(visited);
+    Ok(true)
+}
+
 /// Walk input_derivations from `top`, pruning subtrees whose NEEDED outputs are already in castore
-/// (substituted or previously built). Only the outputs a parent actually references are checked —
-/// a substitutable drv with some other uncached output must not drag its build closure in.
+/// WITH a complete reference closure (substituted or previously built). Only the outputs a parent
+/// actually references are checked — a substitutable drv with some other uncached output must not
+/// drag its build closure in. A drv whose outputs are present but whose closure dangles is
+/// traversed (not rebuilt) so the drvs producing the dangling paths get planned.
 /// Returns the drvs to build, leaves first.
 async fn plan_missing(
     top: &StorePath<String>,
     path_info_service: &Arc<dyn PathInfoService>,
 ) -> Result<Vec<StorePath<String>>, Box<dyn std::error::Error + Send + Sync>> {
-    // drv -> its input drvs (only recorded for drvs that need building)
-    let mut need: HashMap<StorePath<String>, Vec<StorePath<String>>> = HashMap::new();
+    // drv -> (needs building, its input drvs); recorded for built AND traversed drvs so topo
+    // dependencies propagate through present-but-dangling intermediates.
+    let mut graph: HashMap<StorePath<String>, (bool, Vec<StorePath<String>>)> = HashMap::new();
     // (drv, output name) pairs already checked (or scheduled on the frontier)
     let mut checked: HashSet<(StorePath<String>, String)> = HashSet::new();
+    let mut complete: HashSet<StorePath<String>> = HashSet::new();
 
     let top_drv = read_drv(top);
     let top_outs: Vec<String> = top_drv.outputs.keys().cloned().collect();
@@ -123,31 +175,46 @@ async fn plan_missing(
                     .expect("drv output has no store path")
             })
             .collect();
-        let missing = missing_paths(out_paths, path_info_service).await?;
-        if missing.is_empty() {
-            continue; // needed outputs present: prune, we don't need its inputs either
+        let missing = missing_paths(out_paths.clone(), path_info_service).await?;
+        let mut build = !missing.is_empty();
+        if !build {
+            let mut dangling = false;
+            for p in &out_paths {
+                if !closure_complete(p, path_info_service, &mut complete).await? {
+                    dangling = true;
+                    break;
+                }
+            }
+            if !dangling {
+                continue; // needed outputs present with complete closures: prune
+            }
+            build = false; // present but dangling: traverse children, don't rebuild
         }
-        // A build realises all outputs, so children are recorded once per drv.
-        if need.contains_key(&d) {
-            continue;
+        match graph.get_mut(&d) {
+            Some((b, _)) => {
+                *b |= build; // already traversed; maybe upgrade to build
+                continue;
+            }
+            None => {}
         }
         let children: Vec<StorePath<String>> =
             drv.input_derivations.keys().cloned().collect();
         for (c, couts) in &drv.input_derivations {
             frontier.push_back((c.clone(), couts.iter().cloned().collect()));
         }
-        need.insert(d, children);
+        graph.insert(d, (build, children));
     }
 
-    // Topo-sort the needed drvs (children before parents).
-    let mut order: Vec<StorePath<String>> = Vec::with_capacity(need.len());
+    // Topo-sort the recorded drvs (children before parents), then keep only the ones to build.
+    let mut order: Vec<StorePath<String>> = Vec::with_capacity(graph.len());
     let mut done: HashSet<StorePath<String>> = HashSet::new();
-    while order.len() < need.len() {
+    while order.len() < graph.len() {
         let mut progressed = false;
-        let mut ready: Vec<StorePath<String>> = need
+        let mut ready: Vec<StorePath<String>> = graph
             .iter()
-            .filter(|(d, deps)| {
-                !done.contains(*d) && deps.iter().all(|c| !need.contains_key(c) || done.contains(c))
+            .filter(|(d, (_, deps))| {
+                !done.contains(*d)
+                    && deps.iter().all(|c| !graph.contains_key(c) || done.contains(c))
             })
             .map(|(d, _)| d.clone())
             .collect();
@@ -161,7 +228,10 @@ async fn plan_missing(
             return Err("dependency cycle among missing drvs".into());
         }
     }
-    Ok(order)
+    Ok(order
+        .into_iter()
+        .filter(|d| graph[d].0)
+        .collect())
 }
 
 /// The declared inputs of a drv: input_sources + each input derivation's requested output paths
