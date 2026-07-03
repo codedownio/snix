@@ -162,44 +162,73 @@ impl Bwrap {
 
         let host_inputs_dir = spec.host_workdir().join("host_inputs_dir");
         fs::create_dir_all(&host_inputs_dir)?;
-        // Source dir bound read-only into the sandbox at inputs_dir (and used as the overlay lower
-        // when inputs_dir is also a scratch). Normally this is the FUSE the provider mounts at
-        // host_inputs_dir; when an external whole-store mount is configured
-        // (SandboxSpec::external_inputs, e.g. nox-mount) we bind that instead, so the build reads
-        // its inputs through that cached mount rather than a fresh per-build castore FUSE. bwrap
-        // performs the bind inside its own user+mount namespace, so this needs no extra privilege.
+        let inputs_dir = spec.inputs_provider().inputs_dir().to_path_buf();
+        // How the build's inputs are provided. Three modes:
+        //  - default (external_inputs None): a per-build castore FUSE the provider mounts at
+        //    host_inputs_dir, bound at inputs_dir and made writable by the overlay below.
+        //  - external whole-store (external_inputs set, no names): bind the whole already-mounted
+        //    store (e.g. nox-mount) as the overlay lower — reuses that cache, no per-build FUSE, but
+        //    exposes the output path too (only safe when the output isn't already in the store).
+        //  - external declared-inputs (external_inputs + external_input_names): inputs_dir is a
+        //    writable scratch, and only the build's declared input paths are bound read-only into it
+        //    from the mount. The output path is never in view, so the build creates it fresh — this
+        //    is the correct, pure form. bwrap binds inside its own userns, so no extra privilege.
+        let declared =
+            spec.external_inputs().is_some() && !spec.external_input_names().is_empty();
         let inputs_src: OsString = match spec.external_inputs() {
             Some(ext) => ext.into(),
             None => Path::new("/").join(&host_inputs_dir).into(),
         };
-        args.extend([
-            "--ro-bind".into(),
-            inputs_src.clone(),
-            Path::new("/")
-                .join(spec.inputs_provider().inputs_dir())
-                .into(),
-        ]);
+        if !declared {
+            // Bind the whole inputs source at inputs_dir; writability (when inputs_dir is a scratch)
+            // is provided by the overlay below.
+            args.extend([
+                "--ro-bind".into(),
+                inputs_src.clone(),
+                Path::new("/").join(&inputs_dir).into(),
+            ]);
+        }
         for scratch in spec.scratches() {
             let scratch_path = scratch_dir.join(scratch);
             fs::create_dir_all(&scratch_path)?;
-            if scratch == spec.inputs_provider().inputs_dir() {
-                let overlay_workdir = spec.host_workdir().join("overlay_workdir");
-                fs::create_dir_all(&overlay_workdir)?;
-                args.extend([
-                    "--overlay-src".into(),
-                    inputs_src.clone(),
-                    "--overlay".into(),
-                    scratch_path.into(),
-                    overlay_workdir.into(),
-                    Path::new("/")
-                        .join(spec.inputs_provider().inputs_dir())
-                        .into(),
-                ]);
+            if *scratch == inputs_dir {
+                if declared {
+                    // inputs_dir is a plain writable scratch; declared inputs are bound in below.
+                    args.extend([
+                        "--bind".into(),
+                        scratch_path.into(),
+                        Path::new("/").join(scratch).into(),
+                    ]);
+                } else {
+                    let overlay_workdir = spec.host_workdir().join("overlay_workdir");
+                    fs::create_dir_all(&overlay_workdir)?;
+                    args.extend([
+                        "--overlay-src".into(),
+                        inputs_src.clone(),
+                        "--overlay".into(),
+                        scratch_path.into(),
+                        overlay_workdir.into(),
+                        Path::new("/").join(&inputs_dir).into(),
+                    ]);
+                }
             } else {
                 args.extend([
                     "--bind".into(),
                     scratch_path.into(),
                     Path::new("/").join(scratch).into(),
+                ]);
+            }
+        }
+        if declared {
+            // Bind each declared input read-only from the external mount into inputs_dir.
+            let ext = spec
+                .external_inputs()
+                .expect("declared implies external_inputs");
+            for name in spec.external_input_names() {
+                args.extend([
+                    "--ro-bind".into(),
+                    ext.join(name).into(),
+                    Path::new("/").join(&inputs_dir).join(name).into(),
                 ]);
             }
         }
