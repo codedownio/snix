@@ -164,6 +164,82 @@ async fn plan_missing(
     Ok(order)
 }
 
+/// The declared inputs of a drv: input_sources + each input derivation's requested output paths
+/// (read from the input .drv itself, since we have no eval-populated known_paths).
+fn declared_input_seeds(drv: &Derivation) -> Vec<StorePath<String>> {
+    let mut seeds: Vec<StorePath<String>> = drv.input_sources.iter().cloned().collect();
+    for (idrv_path, outs) in &drv.input_derivations {
+        let idrv = read_drv(idrv_path);
+        for out in outs {
+            let p = idrv
+                .outputs
+                .get(out)
+                .unwrap_or_else(|| panic!("input drv {idrv_path} has no output {out}"))
+                .path
+                .clone()
+                .expect("input drv output has no store path");
+            seeds.push(p);
+        }
+    }
+    seeds
+}
+
+/// Walk the reference closure of the seeds, resolving each to a castore Node from PathInfo.
+/// Each PathInfo.get is a store round-trip and the closure is large (100s of paths), so we fetch
+/// a whole BFS level concurrently rather than serially -- serial grpc otherwise dominates the
+/// build wall-time (~10s for this env vs ~sub-second for the actual build).
+/// Paths without PathInfo are returned as missing (their references can't be expanded);
+/// `skip` paths are not resolved at all (used for outputs that a planned earlier build produces).
+async fn resolve_input_closure(
+    seeds: Vec<StorePath<String>>,
+    skip: &HashSet<StorePath<String>>,
+    services: &Services,
+) -> Result<
+    (BTreeMap<StorePath<String>, Node>, Vec<StorePath<String>>),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    let mut visited: HashSet<StorePath<String>> = HashSet::new();
+    let mut resolved_inputs: BTreeMap<StorePath<String>, Node> = BTreeMap::new();
+    let mut missing: Vec<StorePath<String>> = Vec::new();
+    let mut frontier: Vec<StorePath<String>> = seeds;
+    while !frontier.is_empty() {
+        let to_fetch: Vec<StorePath<String>> = frontier
+            .into_iter()
+            .filter(|sp| !skip.contains(sp) && visited.insert(sp.clone()))
+            .collect();
+        let infos: Vec<(StorePath<String>, Option<PathInfo>)> =
+            futures::stream::iter(to_fetch.into_iter())
+                .map(|sp| {
+                    let path_info_service = services.path_info_service.clone();
+                    async move {
+                        let info = path_info_service
+                            .get(*sp.digest())
+                            .await
+                            .map_err(std::io::Error::other)?;
+                        Ok::<_, std::io::Error>((sp, info))
+                    }
+                })
+                .buffer_unordered(64)
+                .try_collect()
+                .await?;
+        let mut next = Vec::new();
+        for (sp, info) in infos {
+            let Some(info) = info else {
+                missing.push(sp);
+                continue;
+            };
+            for r in &info.references {
+                if !visited.contains(r) {
+                    next.push(r.clone());
+                }
+            }
+            resolved_inputs.insert(info.store_path, info.node);
+        }
+        frontier = next;
+    }
+    Ok((resolved_inputs, missing))
+}
+
 /// Build one drv whose full input closure is present in castore; persist output PathInfo.
 async fn build_one(
     drv_path: &StorePath<String>,
@@ -179,66 +255,16 @@ async fn build_one(
         services.directory_service.clone(),
     );
 
-    // Seed the input queue with input_sources + each input derivation's requested output paths
-    // (read from the input .drv itself, since we have no eval-populated known_paths).
-    let mut queue: VecDeque<StorePath<String>> = VecDeque::new();
-    for s in &drv.input_sources {
-        queue.push_back(s.clone());
-    }
-    for (idrv_path, outs) in &drv.input_derivations {
-        let idrv = read_drv(idrv_path);
-        for out in outs {
-            let p = idrv
-                .outputs
-                .get(out)
-                .unwrap_or_else(|| panic!("input drv {idrv_path} has no output {out}"))
-                .path
-                .clone()
-                .expect("input drv output has no store path");
-            queue.push_back(p);
-        }
-    }
-
-    // Walk the reference closure of those inputs, resolving each to a castore Node from PathInfo.
-    // Each PathInfo.get is a store round-trip and the closure is large (100s of paths), so we fetch
-    // a whole BFS level concurrently rather than serially -- serial grpc otherwise dominates the
-    // build wall-time (~10s for this env vs ~sub-second for the actual build).
-    let mut visited: HashSet<StorePath<String>> = HashSet::new();
-    let mut resolved_inputs: BTreeMap<StorePath<String>, Node> = BTreeMap::new();
-    let mut frontier: Vec<StorePath<String>> = queue.into_iter().collect();
-    while !frontier.is_empty() {
-        let to_fetch: Vec<StorePath<String>> = frontier
-            .into_iter()
-            .filter(|sp| visited.insert(sp.clone()))
-            .collect();
-        let infos: Vec<PathInfo> = futures::stream::iter(to_fetch.into_iter())
-            .map(|sp| {
-                let path_info_service = services.path_info_service.clone();
-                async move {
-                    path_info_service
-                        .get(*sp.digest())
-                        .await
-                        .map_err(std::io::Error::other)?
-                        .ok_or_else(|| {
-                            std::io::Error::other(format!(
-                                "path_info missing in castore for {sp} (copy its closure first)"
-                            ))
-                        })
-                }
-            })
-            .buffer_unordered(64)
-            .try_collect()
-            .await?;
-        let mut next = Vec::new();
-        for info in infos {
-            for r in &info.references {
-                if !visited.contains(r) {
-                    next.push(r.clone());
-                }
-            }
-            resolved_inputs.insert(info.store_path, info.node);
-        }
-        frontier = next;
+    let seeds = declared_input_seeds(&drv);
+    let (resolved_inputs, missing) =
+        resolve_input_closure(seeds, &HashSet::new(), services).await?;
+    if !missing.is_empty() {
+        return Err(format!(
+            "path_info missing in castore for {} paths (copy their closures first), e.g. {}",
+            missing.len(),
+            missing[0]
+        )
+        .into());
     }
     eprintln!("resolved {} input paths from castore", resolved_inputs.len());
 
@@ -355,6 +381,37 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for d in &plan {
         eprintln!("  {d}");
     }
+
+    // Pre-check every planned build's declared input closure and report ALL missing paths in one
+    // shot (exit 3), so a driver can substitute/ingest them and retry, instead of failing one
+    // missing path at a time. Outputs of planned drvs will exist once their build runs — skip them.
+    let planned_outputs: HashSet<StorePath<String>> = plan
+        .iter()
+        .flat_map(|d| {
+            read_drv(d)
+                .outputs
+                .values()
+                .map(|o| o.path.clone().expect("drv output has no store path"))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut missing_all: std::collections::BTreeSet<StorePath<String>> = Default::default();
+    for d in &plan {
+        let seeds = declared_input_seeds(&read_drv(d));
+        let (_, missing) = resolve_input_closure(seeds, &planned_outputs, &services).await?;
+        missing_all.extend(missing);
+    }
+    if !missing_all.is_empty() {
+        for p in &missing_all {
+            println!("MISSING_INPUT /nix/store/{p}");
+        }
+        eprintln!(
+            "{} input paths missing from castore; ingest them and re-run",
+            missing_all.len()
+        );
+        std::process::exit(3);
+    }
+
     let total = plan.len();
     for (i, d) in plan.iter().enumerate() {
         eprintln!("[{}/{}] {}", i + 1, total, d);
