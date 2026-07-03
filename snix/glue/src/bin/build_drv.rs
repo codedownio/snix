@@ -62,18 +62,13 @@ struct Services {
     build_service: Box<dyn BuildService>,
 }
 
-/// Which of the drv's declared outputs have no PathInfo in castore.
+/// Which of the given output paths have no PathInfo in castore.
 /// A `get` (not `has`) on purpose: through a Cache{near,far} composition it substitutes.
-async fn missing_outputs(
-    drv: &Derivation,
+async fn missing_paths(
+    paths: Vec<StorePath<String>>,
     path_info_service: &Arc<dyn PathInfoService>,
 ) -> Result<Vec<StorePath<String>>, Box<dyn std::error::Error + Send + Sync>> {
-    let outs: Vec<StorePath<String>> = drv
-        .outputs
-        .values()
-        .map(|o| o.path.clone().expect("drv output has no store path"))
-        .collect();
-    let missing: Vec<StorePath<String>> = futures::stream::iter(outs)
+    let missing: Vec<StorePath<String>> = futures::stream::iter(paths)
         .map(|sp| {
             let pis = path_info_service.clone();
             async move {
@@ -91,28 +86,56 @@ async fn missing_outputs(
     Ok(missing)
 }
 
-/// Walk input_derivations from `top`, pruning subtrees whose outputs are already in castore
-/// (substituted or previously built). Returns the drvs to build, leaves first.
+/// Walk input_derivations from `top`, pruning subtrees whose NEEDED outputs are already in castore
+/// (substituted or previously built). Only the outputs a parent actually references are checked —
+/// a substitutable drv with some other uncached output must not drag its build closure in.
+/// Returns the drvs to build, leaves first.
 async fn plan_missing(
     top: &StorePath<String>,
     path_info_service: &Arc<dyn PathInfoService>,
 ) -> Result<Vec<StorePath<String>>, Box<dyn std::error::Error + Send + Sync>> {
     // drv -> its input drvs (only recorded for drvs that need building)
     let mut need: HashMap<StorePath<String>, Vec<StorePath<String>>> = HashMap::new();
-    let mut visited: HashSet<StorePath<String>> = HashSet::new();
-    let mut frontier: VecDeque<StorePath<String>> = VecDeque::from([top.clone()]);
-    while let Some(d) = frontier.pop_front() {
-        if !visited.insert(d.clone()) {
+    // (drv, output name) pairs already checked (or scheduled on the frontier)
+    let mut checked: HashSet<(StorePath<String>, String)> = HashSet::new();
+
+    let top_drv = read_drv(top);
+    let top_outs: Vec<String> = top_drv.outputs.keys().cloned().collect();
+    let mut frontier: VecDeque<(StorePath<String>, Vec<String>)> =
+        VecDeque::from([(top.clone(), top_outs)]);
+    while let Some((d, outs)) = frontier.pop_front() {
+        let outs: Vec<String> = outs
+            .into_iter()
+            .filter(|o| checked.insert((d.clone(), o.clone())))
+            .collect();
+        if outs.is_empty() {
             continue;
         }
         let drv = read_drv(&d);
-        let missing = missing_outputs(&drv, path_info_service).await?;
+        let out_paths: Vec<StorePath<String>> = outs
+            .iter()
+            .map(|o| {
+                drv.outputs
+                    .get(o)
+                    .unwrap_or_else(|| panic!("drv {d} has no output {o}"))
+                    .path
+                    .clone()
+                    .expect("drv output has no store path")
+            })
+            .collect();
+        let missing = missing_paths(out_paths, path_info_service).await?;
         if missing.is_empty() {
-            continue; // outputs present: prune, we don't need its inputs either
+            continue; // needed outputs present: prune, we don't need its inputs either
+        }
+        // A build realises all outputs, so children are recorded once per drv.
+        if need.contains_key(&d) {
+            continue;
         }
         let children: Vec<StorePath<String>> =
             drv.input_derivations.keys().cloned().collect();
-        frontier.extend(children.iter().cloned());
+        for (c, couts) in &drv.input_derivations {
+            frontier.push_back((c.clone(), couts.iter().cloned().collect()));
+        }
         need.insert(d, children);
     }
 
