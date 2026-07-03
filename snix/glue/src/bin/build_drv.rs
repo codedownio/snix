@@ -42,8 +42,13 @@ fn read_drv(store_path: &StorePath<String>) -> Derivation {
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
 
-    let (blob_service, directory_service, path_info_service, nar_calculation_service) =
+    let (blob_service, directory_service, path_info_service, _nar_calculation_service) =
         construct_services(args.service_addrs).await?;
+    // Compute output NARs locally from the blob+directory services, rather than via the grpc NAR
+    // service that construct_services prefers when the PathInfo client advertises one: nox-store
+    // (unlike snix's own daemon) does not implement remote NAR calculation.
+    let nar_calculation_service =
+        snix_store::nar::SimpleRenderer::new(blob_service.clone(), directory_service.clone());
     let build_service = buildservice::from_addr(
         &args.build_service_addr,
         blob_service.clone(),
