@@ -94,7 +94,7 @@ where
         };
 
         let spec = SandboxSpec::builder()
-            .host_workdir(sandbox_path)
+            .host_workdir(sandbox_path.clone())
             .sandbox_workdir(request.working_dir)
             .scratches(request.scratch_paths)
             .command(request.command_args)
