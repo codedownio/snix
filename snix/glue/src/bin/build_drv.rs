@@ -47,12 +47,36 @@ struct Args {
     /// (leaves first), instead of requiring the full input closure to be present.
     #[arg(long)]
     recursive: bool,
+
+    /// Extra directories to read `.drv` files from (tried in order before /nix/store).
+    /// Lets a driver point at e.g. a per-build overlay upper dir without a mount namespace.
+    #[arg(long)]
+    drv_dir: Vec<String>,
+
+    /// Value for NIX_BUILD_CORES inside the sandbox (like nix's --cores).
+    /// Defaults to all host cores; derivation_into_build_request otherwise leaves it at 0,
+    /// which makes stdenv's enableParallelBuilding build single-threaded.
+    #[arg(long)]
+    cores: Option<usize>,
 }
 
+/// Where to look for `.drv` aterm files; set once from --drv-dir at startup, /nix/store last.
+static DRV_DIRS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
 fn read_drv(store_path: &StorePath<String>) -> Derivation {
-    let p = format!("/nix/store/{}", store_path);
-    let bytes = std::fs::read(&p).unwrap_or_else(|e| panic!("read drv {p}: {e}"));
-    Derivation::from_aterm_bytes(&bytes).unwrap_or_else(|e| panic!("parse drv {p}: {e:?}"))
+    let dirs = DRV_DIRS.get().expect("DRV_DIRS initialized");
+    for dir in dirs {
+        let p = format!("{dir}/{store_path}");
+        match std::fs::read(&p) {
+            Ok(bytes) => {
+                return Derivation::from_aterm_bytes(&bytes)
+                    .unwrap_or_else(|e| panic!("parse drv {p}: {e:?}"));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => panic!("read drv {p}: {e}"),
+        }
+    }
+    panic!("drv {store_path} not found in any of {dirs:?}");
 }
 
 struct Services {
@@ -60,6 +84,8 @@ struct Services {
     directory_service: Arc<dyn DirectoryService>,
     path_info_service: Arc<dyn PathInfoService>,
     build_service: Box<dyn BuildService>,
+    /// NIX_BUILD_CORES for the sandbox.
+    cores: usize,
 }
 
 /// Which of the given output paths have no PathInfo in castore.
@@ -343,7 +369,15 @@ async fn build_one(
         .fod_digest()
         .map(|fod_digest| CAHash::Nar(NixHash::Sha256(fod_digest)));
 
-    let build_request = derivation_into_build_request(drv, &resolved_inputs)?;
+    let mut build_request = derivation_into_build_request(drv, &resolved_inputs)?;
+
+    // Like nix's --cores: derivation_into_build_request hardcodes NIX_BUILD_CORES=0, which
+    // makes stdenv's enableParallelBuilding run make single-threaded.
+    for ev in &mut build_request.environment_vars {
+        if ev.key == "NIX_BUILD_CORES" {
+            ev.value = services.cores.to_string().into();
+        }
+    }
 
     // Map refscan-needle indexes back to store paths: outputs first, then the input closure
     // (same order derivation_into_build_request assembles refscan_needles).
@@ -419,6 +453,10 @@ async fn build_one(
 async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
 
+    let mut drv_dirs = args.drv_dir.clone();
+    drv_dirs.push("/nix/store".into());
+    DRV_DIRS.set(drv_dirs).expect("DRV_DIRS set once");
+
     let (blob_service, directory_service, path_info_service, _nar_calculation_service) =
         construct_services(args.service_addrs).await?;
     let build_service = buildservice::from_addr(
@@ -432,6 +470,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         directory_service,
         path_info_service,
         build_service,
+        cores: args.cores.unwrap_or_else(|| {
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+        }),
     };
 
     let drv_path = StorePath::<String>::from_bytes(
@@ -442,9 +483,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return build_one(&drv_path, &services).await;
     }
 
+    // The top drv's outputs, reported at the end (built or already present) so a driver can
+    // read the result paths without knowing the graph.
+    let top_outputs: Vec<StorePath<String>> = read_drv(&drv_path)
+        .outputs
+        .values()
+        .map(|o| o.path.clone().expect("drv output has no store path"))
+        .collect();
+    let print_top = || {
+        for p in &top_outputs {
+            println!("TOP_OUTPUT /nix/store/{p}");
+        }
+    };
+
     let plan = plan_missing(&drv_path, &services.path_info_service).await?;
     if plan.is_empty() {
         eprintln!("nothing to build: all outputs of {} present in castore", drv_path);
+        print_top();
         return Ok(());
     }
     eprintln!("building {} missing drvs (leaves first):", plan.len());
@@ -489,6 +544,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         build_one(d, &services).await?;
         eprintln!("[{}/{}] {} done in {:.1}s", i + 1, total, d, t.elapsed().as_secs_f64());
     }
+    print_top();
 
     Ok(())
 }
