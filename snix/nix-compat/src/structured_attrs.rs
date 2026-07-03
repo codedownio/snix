@@ -121,8 +121,14 @@ where
                 writeln!(f)?;
             }
             serde_json::Value::Array(values) => {
-                // If the array contains any invalid element, the array is skipped entirely.
-                if values.iter().any(|v| !is_good_simple_value(v)) {
+                // If the array contains any invalid element, or another
+                // non-simple type, the array is skipped entirely.
+                if values.iter().any(|v| {
+                    matches!(
+                        v,
+                        serde_json::Value::Array(_) | serde_json::Value::Object(_)
+                    ) || !is_good_simple_value(v)
+                }) {
                     continue;
                 }
                 write!(f, "declare -a {k}=(")?;
@@ -184,6 +190,8 @@ mod test {
     #[case::array_of_strings(json!({"k": ["bar", "baz"]}), r#"declare -a k=('bar' 'baz' )"#)]
     #[case::array_of_strings_and_bool(json!({"k": ["bar", true]}), r#"declare -a k=('bar' 1 )"#)]
     #[case::array_of_strings_and_invalid_number(json!({"k": ["bar", 1.1]}), "")]
+    #[case::array_of_objects(json!({"k": [{"paths": ["a"]}, {"paths": ["b"]}]}), "")]
+    #[case::array_of_arrays(json!({"k": [["a"], ["b"]]}), "")]
     #[case::object_key_escaping(json!(
         {"k": {"it's": "v"}}), r#"declare -A k=(['it'\''s']='v' )"#)]
     #[case::object(json!(
