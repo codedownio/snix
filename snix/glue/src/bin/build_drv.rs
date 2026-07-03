@@ -1,22 +1,32 @@
-//! Experiment: build a single Nix `.drv` via snix's build service, writing outputs to castore.
+//! Experiment: build a Nix `.drv` (or, with `--recursive`, a whole missing `.drv` graph) via
+//! snix's build service, writing outputs to castore.
 //!
-//! Reads a `.drv` (aterm) from the local `/nix/store`, resolves its full input closure from the
-//! castore (which must be pre-populated, e.g. via `snix-store copy`), synthesizes a snix
-//! BuildRequest, runs the sandboxed build, reference-scans the outputs and persists their PathInfo.
-//! This mirrors the build path in `snix_glue::snix_store_io`, but driven directly from a `.drv`
-//! produced by CppNix eval instead of from a snix evaluation. Store/build addrs come from env
-//! (BLOB_SERVICE_ADDR / DIRECTORY_SERVICE_ADDR / PATH_INFO_SERVICE_ADDR / BUILD_SERVICE_ADDR).
+//! Reads `.drv`s (aterm) from the local `/nix/store`, resolves input closures from the castore,
+//! synthesizes snix BuildRequests, runs the sandboxed builds, reference-scans the outputs and
+//! persists their PathInfo. This mirrors the build path in `snix_glue::snix_store_io`, but driven
+//! directly from `.drv`s produced by CppNix eval instead of from a snix evaluation. Store/build
+//! addrs come from env (BLOB_SERVICE_ADDR / DIRECTORY_SERVICE_ADDR / PATH_INFO_SERVICE_ADDR /
+//! BUILD_SERVICE_ADDR).
+//!
+//! `--recursive` walks input_derivations from the top drv: subtrees whose outputs already have
+//! PathInfo in castore are pruned (so a store fronted by a substituter — e.g. the
+//! `cache:?near=&far=nix+https://…` composition — substitutes instead of building), and whatever
+//! remains is built leaves-first. Input sources must already be in castore.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+use std::sync::Arc;
 
 use clap::Parser;
+use futures::stream::{StreamExt, TryStreamExt};
 use nix_compat::derivation::Derivation;
 use nix_compat::nixhash::{CAHash, NixHash};
 use nix_compat::store_path::{STORE_DIR, StorePath};
 use snix_build::buildservice::{self, BuildService};
 use snix_castore::Node;
+use snix_castore::blobservice::BlobService;
+use snix_castore::directoryservice::DirectoryService;
 use snix_glue::builder::derivation_into_build_request;
 use snix_store::nar::NarCalculationService;
 use snix_store::pathinfoservice::{PathInfo, PathInfoService};
@@ -32,6 +42,11 @@ struct Args {
 
     #[arg(long, env = "BUILD_SERVICE_ADDR", default_value = "dummy:")]
     build_service_addr: String,
+
+    /// Recursively build every input derivation whose outputs are missing from castore
+    /// (leaves first), instead of requiring the full input closure to be present.
+    #[arg(long)]
+    recursive: bool,
 }
 
 fn read_drv(store_path: &StorePath<String>) -> Derivation {
@@ -40,28 +55,106 @@ fn read_drv(store_path: &StorePath<String>) -> Derivation {
     Derivation::from_aterm_bytes(&bytes).unwrap_or_else(|e| panic!("parse drv {p}: {e:?}"))
 }
 
-async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let args = Args::parse();
+struct Services {
+    blob_service: Arc<dyn BlobService>,
+    directory_service: Arc<dyn DirectoryService>,
+    path_info_service: Arc<dyn PathInfoService>,
+    build_service: Box<dyn BuildService>,
+}
 
-    let (blob_service, directory_service, path_info_service, _nar_calculation_service) =
-        construct_services(args.service_addrs).await?;
+/// Which of the drv's declared outputs have no PathInfo in castore.
+/// A `get` (not `has`) on purpose: through a Cache{near,far} composition it substitutes.
+async fn missing_outputs(
+    drv: &Derivation,
+    path_info_service: &Arc<dyn PathInfoService>,
+) -> Result<Vec<StorePath<String>>, Box<dyn std::error::Error + Send + Sync>> {
+    let outs: Vec<StorePath<String>> = drv
+        .outputs
+        .values()
+        .map(|o| o.path.clone().expect("drv output has no store path"))
+        .collect();
+    let missing: Vec<StorePath<String>> = futures::stream::iter(outs)
+        .map(|sp| {
+            let pis = path_info_service.clone();
+            async move {
+                Ok::<_, snix_store::pathinfoservice::Error>(
+                    pis.get(*sp.digest()).await?.is_none().then_some(sp),
+                )
+            }
+        })
+        .buffer_unordered(8)
+        .try_collect::<Vec<Option<StorePath<String>>>>()
+        .await?
+        .into_iter()
+        .flatten()
+        .collect();
+    Ok(missing)
+}
+
+/// Walk input_derivations from `top`, pruning subtrees whose outputs are already in castore
+/// (substituted or previously built). Returns the drvs to build, leaves first.
+async fn plan_missing(
+    top: &StorePath<String>,
+    path_info_service: &Arc<dyn PathInfoService>,
+) -> Result<Vec<StorePath<String>>, Box<dyn std::error::Error + Send + Sync>> {
+    // drv -> its input drvs (only recorded for drvs that need building)
+    let mut need: HashMap<StorePath<String>, Vec<StorePath<String>>> = HashMap::new();
+    let mut visited: HashSet<StorePath<String>> = HashSet::new();
+    let mut frontier: VecDeque<StorePath<String>> = VecDeque::from([top.clone()]);
+    while let Some(d) = frontier.pop_front() {
+        if !visited.insert(d.clone()) {
+            continue;
+        }
+        let drv = read_drv(&d);
+        let missing = missing_outputs(&drv, path_info_service).await?;
+        if missing.is_empty() {
+            continue; // outputs present: prune, we don't need its inputs either
+        }
+        let children: Vec<StorePath<String>> =
+            drv.input_derivations.keys().cloned().collect();
+        frontier.extend(children.iter().cloned());
+        need.insert(d, children);
+    }
+
+    // Topo-sort the needed drvs (children before parents).
+    let mut order: Vec<StorePath<String>> = Vec::with_capacity(need.len());
+    let mut done: HashSet<StorePath<String>> = HashSet::new();
+    while order.len() < need.len() {
+        let mut progressed = false;
+        let mut ready: Vec<StorePath<String>> = need
+            .iter()
+            .filter(|(d, deps)| {
+                !done.contains(*d) && deps.iter().all(|c| !need.contains_key(c) || done.contains(c))
+            })
+            .map(|(d, _)| d.clone())
+            .collect();
+        ready.sort();
+        for d in ready {
+            done.insert(d.clone());
+            order.push(d);
+            progressed = true;
+        }
+        if !progressed {
+            return Err("dependency cycle among missing drvs".into());
+        }
+    }
+    Ok(order)
+}
+
+/// Build one drv whose full input closure is present in castore; persist output PathInfo.
+async fn build_one(
+    drv_path: &StorePath<String>,
+    services: &Services,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let drv = read_drv(drv_path);
+
     // Compute output NARs locally from the blob+directory services, rather than via the grpc NAR
     // service that construct_services prefers when the PathInfo client advertises one: nox-store
     // (unlike snix's own daemon) does not implement remote NAR calculation.
-    let nar_calculation_service =
-        snix_store::nar::SimpleRenderer::new(blob_service.clone(), directory_service.clone());
-    let build_service = buildservice::from_addr(
-        &args.build_service_addr,
-        blob_service.clone(),
-        directory_service.clone(),
-    )
-    .await?;
-
-    // Parse the top .drv.
-    let drv_path = StorePath::<String>::from_bytes(
-        Path::new(&args.drv).file_name().expect("drv path").as_bytes(),
-    )?;
-    let drv = read_drv(&drv_path);
+    let nar_calculation_service = snix_store::nar::SimpleRenderer::new(
+        services.blob_service.clone(),
+        services.directory_service.clone(),
+    );
 
     // Seed the input queue with input_sources + each input derivation's requested output paths
     // (read from the input .drv itself, since we have no eval-populated known_paths).
@@ -87,7 +180,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Each PathInfo.get is a store round-trip and the closure is large (100s of paths), so we fetch
     // a whole BFS level concurrently rather than serially -- serial grpc otherwise dominates the
     // build wall-time (~10s for this env vs ~sub-second for the actual build).
-    use futures::stream::{StreamExt, TryStreamExt};
     let mut visited: HashSet<StorePath<String>> = HashSet::new();
     let mut resolved_inputs: BTreeMap<StorePath<String>, Node> = BTreeMap::new();
     let mut frontier: Vec<StorePath<String>> = queue.into_iter().collect();
@@ -98,7 +190,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .collect();
         let infos: Vec<PathInfo> = futures::stream::iter(to_fetch.into_iter())
             .map(|sp| {
-                let path_info_service = path_info_service.clone();
+                let path_info_service = services.path_info_service.clone();
                 async move {
                     path_info_service
                         .get(*sp.digest())
@@ -155,7 +247,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .collect();
 
     eprintln!("🔨 building {} ...", drv_path);
-    let build_result = build_service
+    let build_result = services
+        .build_service
         .do_build(build_request)
         .await
         .map_err(|e| format!("do_build failed: {e}"))?;
@@ -190,7 +283,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ),
             ca: ca.take(),
         };
-        path_info_service.put(path_info).await?;
+        services.path_info_service.put(path_info).await?;
 
         println!(
             "OUTPUT /nix/store/{}  ({} refs, nar_size={}, nar_sha256={})",
@@ -199,6 +292,52 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             nar_size,
             data_encoding::HEXLOWER.encode(&nar_sha256)
         );
+    }
+
+    Ok(())
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let args = Args::parse();
+
+    let (blob_service, directory_service, path_info_service, _nar_calculation_service) =
+        construct_services(args.service_addrs).await?;
+    let build_service = buildservice::from_addr(
+        &args.build_service_addr,
+        blob_service.clone(),
+        directory_service.clone(),
+    )
+    .await?;
+    let services = Services {
+        blob_service,
+        directory_service,
+        path_info_service,
+        build_service,
+    };
+
+    let drv_path = StorePath::<String>::from_bytes(
+        Path::new(&args.drv).file_name().expect("drv path").as_bytes(),
+    )?;
+
+    if !args.recursive {
+        return build_one(&drv_path, &services).await;
+    }
+
+    let plan = plan_missing(&drv_path, &services.path_info_service).await?;
+    if plan.is_empty() {
+        eprintln!("nothing to build: all outputs of {} present in castore", drv_path);
+        return Ok(());
+    }
+    eprintln!("building {} missing drvs (leaves first):", plan.len());
+    for d in &plan {
+        eprintln!("  {d}");
+    }
+    let total = plan.len();
+    for (i, d) in plan.iter().enumerate() {
+        eprintln!("[{}/{}] {}", i + 1, total, d);
+        let t = std::time::Instant::now();
+        build_one(d, &services).await?;
+        eprintln!("[{}/{}] {} done in {:.1}s", i + 1, total, d, t.elapsed().as_secs_f64());
     }
 
     Ok(())
