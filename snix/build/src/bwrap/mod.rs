@@ -276,21 +276,22 @@ impl Bwrap {
             "/etc/group".into(),
         ]);
         if spec.allow_network() {
+            // -try: minimal containers (e.g. dockerTools images) may lack /etc/services or even
+            // /etc/hosts; a plain --ro-bind of a missing source makes bwrap itself fail.
             args.extend([
-                "--ro-bind".into(),
+                "--ro-bind-try".into(),
                 "/etc/hosts".into(),
                 "/etc/hosts".into(),
-                "--ro-bind".into(),
+                "--ro-bind-try".into(),
                 "/etc/resolv.conf".into(),
                 "/etc/resolv.conf".into(),
-                "--ro-bind".into(),
+                "--ro-bind-try".into(),
                 "/etc/services".into(),
                 "/etc/services".into(),
                 "--ro-bind".into(),
                 etc.join("nsswitch.conf").into(),
                 "/etc/nsswitch.conf".into(),
             ]);
-            //TODO: Create /etc/nsswitch.conf with: "hosts: files dns\nservices: files\n"
         } else {
             // Use predefined /etc/hosts like nix does.
             // Among other things it is required for libuv getaddrinfo() tests to pass.

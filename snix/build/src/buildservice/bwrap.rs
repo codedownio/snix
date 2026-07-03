@@ -153,7 +153,18 @@ where
 
             warn!(stdout=%stdout, stderr=%stderr, exit_code=%outcome.output().status, "build failed");
 
-            return Err(std::io::Error::other("nonzero exit code".to_string()));
+            // Carry the tail of the transcript in the error itself: callers without a tracing
+            // subscriber (or reading a driver's stderr remotely) otherwise see only "nonzero exit".
+            let tail = |b: &[u8]| -> String {
+                let start = b.len().saturating_sub(2048);
+                String::from_utf8_lossy(&b[start..]).into_owned()
+            };
+            return Err(std::io::Error::other(format!(
+                "nonzero exit code ({}); stdout tail: {}; stderr tail: {}",
+                outcome.output().status,
+                tail(&outcome.output().stdout),
+                tail(&outcome.output().stderr),
+            )));
         }
 
         let outputs: Vec<_> = request
