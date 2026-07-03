@@ -28,7 +28,9 @@ where
 }
 
 /// determine if the value is "good to print".
-/// We essentially want to reject floats which are not just integers.
+/// We essentially want to reject floats which are not just integers, and
+/// nested complex types (arrays/objects), which CppNix skips over too
+/// (a containing array/object with such an element is skipped entirely).
 fn is_good_simple_value(v: &serde_json::Value) -> bool {
     match v {
         serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::String(_) => true,
@@ -43,9 +45,7 @@ fn is_good_simple_value(v: &serde_json::Value) -> bool {
                 number.as_u128().is_some()
             }
         }
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-            unreachable!("Snix bug: called write_simple_type on complex type")
-        }
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => false,
     }
 }
 
@@ -184,6 +184,8 @@ mod test {
     #[case::array_of_strings(json!({"k": ["bar", "baz"]}), r#"declare -a k=('bar' 'baz' )"#)]
     #[case::array_of_strings_and_bool(json!({"k": ["bar", true]}), r#"declare -a k=('bar' 1 )"#)]
     #[case::array_of_strings_and_invalid_number(json!({"k": ["bar", 1.1]}), "")]
+    #[case::array_of_objects(json!({"k": [{"paths": ["a"]}, {"paths": ["b"]}]}), "")]
+    #[case::array_of_arrays(json!({"k": [["a"], ["b"]]}), "")]
     #[case::object_key_escaping(json!(
         {"k": {"it's": "v"}}), r#"declare -A k=(['it'\''s']='v' )"#)]
     #[case::object(json!(
