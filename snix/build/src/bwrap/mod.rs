@@ -15,11 +15,6 @@ const COMMON_BWRAP_ARGS: &[&str] = &[
     "--unshare-pid",
     "--die-with-parent",
     "--as-pid-1",
-    "--unshare-user",
-    "--uid",
-    "1000",
-    "--gid",
-    "100",
     "--clearenv",
     "--tmpfs",
     "/",
@@ -30,6 +25,10 @@ const COMMON_BWRAP_ARGS: &[&str] = &[
     "--tmpfs",
     "/tmp",
 ];
+
+/// Only with [SandboxSpec::userns]: unshare a user namespace and become nixbld inside it.
+/// (--uid/--gid require --unshare-user; without it the build runs as the invoking user.)
+const USERNS_BWRAP_ARGS: &[&str] = &["--unshare-user", "--uid", "1000", "--gid", "100"];
 
 const ETC_PASSWD: &[u8] = b"
 root:x:0:0:Nix build user:/build:/noshell
@@ -147,6 +146,9 @@ impl Bwrap {
         let scratch_dir = spec.host_workdir().join("scratches");
         fs::create_dir_all(&scratch_dir)?;
         let mut args: Vec<OsString> = COMMON_BWRAP_ARGS.iter().map(|s| s.into()).collect();
+        if spec.userns() {
+            args.extend(USERNS_BWRAP_ARGS.iter().map(OsString::from));
+        }
         if !spec.allow_network() {
             args.push("--unshare-net".into());
         }

@@ -83,11 +83,17 @@ where
                 .find(|(k, _)| k == "external-store")
                 .map(|(_, v)| std::path::PathBuf::from(v.into_owned()));
 
+            // Optional `?userns=off`: don't unshare a user namespace (needed when running as
+            // root+CAP_SYS_ADMIN in a container with a masked /proc, e.g. a k8s pod — a fresh
+            // procfs can't be mounted from a nested user namespace there).
+            let userns = !url.query_pairs().any(|(k, v)| k == "userns" && v == "off");
+
             Box::new(BubblewrapBuildService::new(
                 url.path().into(),
                 blob_service,
                 directory_service,
                 external_store,
+                userns,
             ))
         }
         scheme => {
