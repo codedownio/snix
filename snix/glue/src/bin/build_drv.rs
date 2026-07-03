@@ -15,10 +15,11 @@ use clap::Parser;
 use nix_compat::derivation::Derivation;
 use nix_compat::nixhash::{CAHash, NixHash};
 use nix_compat::store_path::{STORE_DIR, StorePath};
-use snix_build::buildservice;
+use snix_build::buildservice::{self, BuildService};
 use snix_castore::Node;
 use snix_glue::builder::derivation_into_build_request;
-use snix_store::pathinfoservice::PathInfo;
+use snix_store::nar::NarCalculationService;
+use snix_store::pathinfoservice::{PathInfo, PathInfoService};
 use snix_store::utils::{ServiceUrlsMemory, construct_services};
 
 #[derive(Parser)]
