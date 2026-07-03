@@ -78,22 +78,46 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // Walk the reference closure of those inputs, resolving each to a castore Node from PathInfo.
+    // Each PathInfo.get is a store round-trip and the closure is large (100s of paths), so we fetch
+    // a whole BFS level concurrently rather than serially -- serial grpc otherwise dominates the
+    // build wall-time (~10s for this env vs ~sub-second for the actual build).
+    use futures::stream::{StreamExt, TryStreamExt};
     let mut visited: HashSet<StorePath<String>> = HashSet::new();
     let mut resolved_inputs: BTreeMap<StorePath<String>, Node> = BTreeMap::new();
-    while let Some(sp) = queue.pop_front() {
-        if !visited.insert(sp.clone()) {
-            continue;
-        }
-        let info = path_info_service
-            .get(*sp.digest())
-            .await?
-            .ok_or_else(|| format!("path_info missing in castore for {sp} (copy its closure first)"))?;
-        for r in &info.references {
-            if !visited.contains(r) {
-                queue.push_back(r.clone());
+    let mut frontier: Vec<StorePath<String>> = queue.into_iter().collect();
+    while !frontier.is_empty() {
+        let to_fetch: Vec<StorePath<String>> = frontier
+            .into_iter()
+            .filter(|sp| visited.insert(sp.clone()))
+            .collect();
+        let infos: Vec<PathInfo> = futures::stream::iter(to_fetch.into_iter())
+            .map(|sp| {
+                let path_info_service = path_info_service.clone();
+                async move {
+                    path_info_service
+                        .get(*sp.digest())
+                        .await
+                        .map_err(std::io::Error::other)?
+                        .ok_or_else(|| {
+                            std::io::Error::other(format!(
+                                "path_info missing in castore for {sp} (copy its closure first)"
+                            ))
+                        })
+                }
+            })
+            .buffer_unordered(64)
+            .try_collect()
+            .await?;
+        let mut next = Vec::new();
+        for info in infos {
+            for r in &info.references {
+                if !visited.contains(r) {
+                    next.push(r.clone());
+                }
             }
+            resolved_inputs.insert(info.store_path, info.node);
         }
-        resolved_inputs.insert(info.store_path, info.node);
+        frontier = next;
     }
     eprintln!("resolved {} input paths from castore", resolved_inputs.len());
 
