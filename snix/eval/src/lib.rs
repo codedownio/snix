@@ -56,6 +56,11 @@ pub use crate::pretty_ast::pretty_print_expr;
 pub use crate::source::SourceCode;
 pub use crate::value::{NixContext, NixContextElement};
 pub use crate::vm::{EvalMode, generators};
+
+/// Diagnostic: the name of the generator currently being resumed on this thread, if any.
+pub fn current_generator_name() -> Option<&'static str> {
+    crate::vm::generators::CURRENT_GENERATOR.with(|c| c.get())
+}
 pub use crate::warnings::{EvalWarning, WarningKind};
 pub use builtin_macros;
 use smol_str::SmolStr;
