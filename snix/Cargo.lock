@@ -5293,6 +5293,7 @@ name = "snix-cli-nix-daemon"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "futures",
  "mimalloc",
  "nix-compat",
  "nix-daemon",
@@ -5301,6 +5302,7 @@ dependencies = [
  "snix-tracing",
  "tokio",
  "tokio-listener",
+ "tonic",
  "tracing",
 ]
 
