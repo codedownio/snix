@@ -21,6 +21,12 @@ use crate::warnings::{EvalWarning, WarningKind};
 
 use super::*;
 
+thread_local! {
+    /// Diagnostic: the generator currently being resumed, readable from a panic hook.
+    pub static CURRENT_GENERATOR: std::cell::Cell<Option<&'static str>> =
+        const { std::cell::Cell::new(None) };
+}
+
 // -- Implementation of generic generator logic.
 
 /// States that a generator can be in while being driven by the VM.
@@ -291,6 +297,7 @@ where
             (_, GeneratorState::AwaitingValue) => VMResponse::Value(self.stack_pop()),
         };
 
+        CURRENT_GENERATOR.with(|c| c.set(Some(name)));
         loop {
             match generator.resume_with(message) {
                 // If the generator yields, it contains an instruction

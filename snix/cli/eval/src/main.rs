@@ -69,6 +69,17 @@ fn lint<E: Write + Clone + Send>(
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
 
+    // Diagnostic: name the generator being resumed when a panic fires (e.g. the genawaiter
+    // "entered unreachable code" from a generator awaiting real I/O).
+    {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let g = snix_eval::current_generator_name();
+            eprintln!("PANIC while resuming generator: {:?}", g);
+            default_hook(info);
+        }));
+    }
+
     let tokio_runtime = tokio::runtime::Runtime::new()?;
     let (mut stdout, mut stderr, io_handle) = tokio_runtime.block_on(async {
         let tracing_handle = snix_tracing::TracingBuilder::default()
