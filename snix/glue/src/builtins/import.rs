@@ -505,12 +505,18 @@ mod import_builtins {
             executable: false,
         };
 
-        // calculate the nar hash
+        // calculate the nar hash. block_on, not .await: this builtin runs inside a genawaiter
+        // generator, which must only suspend at its own yield points — directly awaiting a real
+        // future here panics ("entered unreachable code" in genawaiter) as soon as it returns
+        // Pending, which any remote (non-memory) store does on first poll.
         let (nar_size, nar_sha256) = state
-            .build_state
-            .nar_calculation_service
-            .calculate_nar(&root_node)
-            .await
+            .tokio_handle
+            .block_on(
+                state
+                    .build_state
+                    .nar_calculation_service
+                    .calculate_nar(&root_node),
+            )
             .map_err(|e| ErrorKind::SnixError(Arc::from(e)))?;
 
         let content_digest: [u8; 32] = h.finalize().into();
