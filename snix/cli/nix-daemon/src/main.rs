@@ -2,8 +2,9 @@ use clap::Parser;
 use mimalloc::MiMalloc;
 use nix_compat::nix_daemon::handler::NixDaemon;
 use nix_daemon::SnixDaemon;
+use snix_store::pathinfoservice::{CachePathInfoService, LruPathInfoService, PathInfoService};
 use snix_store::utils::{ServiceUrlsGrpc, construct_services};
-use std::{error::Error, sync::Arc};
+use std::{error::Error, num::NonZeroUsize, sync::Arc};
 use tokio_listener::SystemOptions;
 use tracing::error;
 
@@ -51,6 +52,27 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (blob_service, directory_service, path_info_service, _nar_calculation_service) =
         construct_services(cli.service_addrs).await?;
+
+    // nox: front the (remote) path-info service with a local LRU read-through cache. A build's Nix
+    // eval issues tens of thousands of IsValidPath/QueryPathInfo/QueryValidPaths queries -- often for
+    // the same store paths repeatedly, and a rebuild re-queries almost the same closure. Path info is
+    // immutable, so caching it locally turns those per-query round-trips to the remote store
+    // (nox-store -> Postgres) into local hits. Capacity via NIX_DAEMON_PATHINFO_CACHE_ENTRIES
+    // (0 disables); default 100000.
+    let path_info_service: Arc<dyn PathInfoService> = {
+        let cap = std::env::var("NIX_DAEMON_PATHINFO_CACHE_ENTRIES")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(100_000);
+        match NonZeroUsize::new(cap) {
+            None => path_info_service,
+            Some(cap) => Arc::new(CachePathInfoService::new(
+                "nox-pathinfo-cache".to_string(),
+                LruPathInfoService::with_capacity("nox-pathinfo-lru".to_string(), cap),
+                path_info_service,
+            )),
+        }
+    };
 
     let listen_address = cli.listen_args.listen_address.unwrap_or_else(|| {
         "/tmp/snix-daemon.sock"
