@@ -507,10 +507,13 @@ mod import_builtins {
 
         // calculate the nar hash
         let (nar_size, nar_sha256) = state
-            .build_state
-            .nar_calculation_service
-            .calculate_nar(&root_node)
-            .await
+            .tokio_handle
+            .block_on(
+                state
+                    .build_state
+                    .nar_calculation_service
+                    .calculate_nar(&root_node),
+            )
             .map_err(|e| ErrorKind::SnixError(Arc::from(e)))?;
 
         let content_digest: [u8; 32] = h.finalize().into();
