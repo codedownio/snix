@@ -27,7 +27,14 @@ async fn import_impl(
     // TODO(sterni): canon_path()?
     let mut path = try_cek_to_value!(coerce_value_to_path(&co, args.pop().unwrap()).await?);
 
-    if path.is_dir() {
+    // Ask the EvalIO layer whether this is a directory, rather than std::fs — the path may live
+    // in a virtual store (castore, a remote store) with nothing materialized on the real
+    // filesystem, in which case `Path::is_dir()` wrongly returns false and we'd try to `open()`
+    // the directory itself instead of its `default.nix`.
+    if matches!(
+        generators::request_read_file_type(&co, path.clone()).await,
+        crate::io::FileType::Directory
+    ) {
         path.push("default.nix");
     }
 
