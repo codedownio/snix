@@ -62,7 +62,12 @@ async fn import_impl(
 
     let result = crate::compiler::compile(
         &parsed.tree().expr().unwrap(),
-        Some(path.clone()),
+        // Relative paths in the imported file resolve against its DIRECTORY. Pass the parent
+        // explicitly (pure path manipulation) rather than the file path: Compiler::new would
+        // otherwise strip the filename with a `Path::is_file()` filesystem stat, which returns
+        // false for a file that lives only in a virtual store (castore, a remote store), leaving
+        // relative imports to resolve against `<file>/…` instead of `<dir>/…`.
+        path.parent().map(|p| p.to_path_buf()),
         // The VM must ensure that a strong reference to the globals outlives
         // any self-references (which are weak) embedded within the globals. If
         // the expect() below panics, it means that did not happen.
