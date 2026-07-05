@@ -63,6 +63,25 @@ fn interpret(code: &str) {
     assert!(result.errors.is_empty(), "{:#?}", result.errors);
 }
 
+/// A user-environment-shaped evaluation: a symlinkJoin over a few dozen common packages
+/// (including a python withPackages set and a compiler), forcing the top drvPath and with it
+/// the instantiation + hashing of the whole derivation graph (several thousand derivations).
+/// Single-package benchmarks like `hello outpath` mostly measure warmup; this is the scale
+/// where per-thunk/per-value interpreter overheads dominate, and it approximates what a
+/// package-environment builder (home-manager-alike, nix-env, devshells) pays per evaluation.
+const ENVIRONMENT_EXPR: &str = r#"
+  let pkgs = import <nixpkgs> {}; in
+  (pkgs.symlinkJoin {
+    name = "bench-environment";
+    paths = with pkgs; [
+      (python3.withPackages (ps: with ps; [ requests setuptools pip ]))
+      nodejs go git vim jq ripgrep tmux curl wget openssl sqlite htop
+      gnumake cmake gcc binutils coreutils findutils gnugrep gnused gawk
+      zsh bash rsync openssh gnupg zip unzip xz zstd
+    ];
+  }).drvPath
+"#;
+
 fn eval_nixpkgs(c: &mut Criterion) {
     c.bench_function("hello outpath", |b| {
         b.iter(|| {
@@ -73,6 +92,12 @@ fn eval_nixpkgs(c: &mut Criterion) {
     c.bench_function("firefox outpath", |b| {
         b.iter(|| {
             interpret(black_box("(import <nixpkgs> {}).firefox.outPath"));
+        })
+    });
+
+    c.bench_function("environment drvpath", |b| {
+        b.iter(|| {
+            interpret(black_box(ENVIRONMENT_EXPR));
         })
     });
 }
