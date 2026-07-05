@@ -27,7 +27,7 @@ use snix_build::buildservice::{self, BuildService};
 use snix_castore::Node;
 use snix_castore::blobservice::BlobService;
 use snix_castore::directoryservice::DirectoryService;
-use snix_glue::builder::derivation_into_build_request;
+use snix_build_glue::builder::derivation_into_build_request;
 use snix_store::nar::NarCalculationService;
 use snix_store::pathinfoservice::{PathInfo, PathInfoService};
 use snix_store::utils::{ServiceUrlsMemory, construct_services};
@@ -63,7 +63,7 @@ struct Args {
 /// Where to look for `.drv` aterm files; set once from --drv-dir at startup, /nix/store last.
 static DRV_DIRS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
 
-fn read_drv(store_path: &StorePath<String>) -> Derivation {
+fn read_drv(store_path: &StorePath) -> Derivation {
     let dirs = DRV_DIRS.get().expect("DRV_DIRS initialized");
     for dir in dirs {
         let p = format!("{dir}/{store_path}");
@@ -83,7 +83,7 @@ struct Services {
     blob_service: Arc<dyn BlobService>,
     directory_service: Arc<dyn DirectoryService>,
     path_info_service: Arc<dyn PathInfoService>,
-    build_service: Box<dyn BuildService>,
+    build_service: Arc<dyn BuildService>,
     /// NIX_BUILD_CORES for the sandbox.
     cores: usize,
 }
@@ -91,10 +91,10 @@ struct Services {
 /// Which of the given output paths have no PathInfo in castore.
 /// A `get` (not `has`) on purpose: through a Cache{near,far} composition it substitutes.
 async fn missing_paths(
-    paths: Vec<StorePath<String>>,
+    paths: Vec<StorePath>,
     path_info_service: &Arc<dyn PathInfoService>,
-) -> Result<Vec<StorePath<String>>, Box<dyn std::error::Error + Send + Sync>> {
-    let missing: Vec<StorePath<String>> = futures::stream::iter(paths)
+) -> Result<Vec<StorePath>, Box<dyn std::error::Error + Send + Sync>> {
+    let missing: Vec<StorePath> = futures::stream::iter(paths)
         .map(|sp| {
             let pis = path_info_service.clone();
             async move {
@@ -104,7 +104,7 @@ async fn missing_paths(
             }
         })
         .buffer_unordered(8)
-        .try_collect::<Vec<Option<StorePath<String>>>>()
+        .try_collect::<Vec<Option<StorePath>>>()
         .await?
         .into_iter()
         .flatten()
@@ -117,21 +117,21 @@ async fn missing_paths(
 /// exclude to-be-built outputs), so a present output can still have dangling references.
 /// `complete` memoizes paths whose closure was verified.
 async fn closure_complete(
-    path: &StorePath<String>,
+    path: &StorePath,
     path_info_service: &Arc<dyn PathInfoService>,
-    complete: &mut HashSet<StorePath<String>>,
+    complete: &mut HashSet<StorePath>,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     if complete.contains(path) {
         return Ok(true);
     }
-    let mut visited: HashSet<StorePath<String>> = HashSet::new();
-    let mut frontier: Vec<StorePath<String>> = vec![path.clone()];
+    let mut visited: HashSet<StorePath> = HashSet::new();
+    let mut frontier: Vec<StorePath> = vec![path.clone()];
     while !frontier.is_empty() {
-        let to_fetch: Vec<StorePath<String>> = frontier
+        let to_fetch: Vec<StorePath> = frontier
             .into_iter()
             .filter(|sp| !complete.contains(sp) && visited.insert(sp.clone()))
             .collect();
-        let infos: Vec<(StorePath<String>, Option<PathInfo>)> =
+        let infos: Vec<(StorePath, Option<PathInfo>)> =
             futures::stream::iter(to_fetch.into_iter())
                 .map(|sp| {
                     let pis = path_info_service.clone();
@@ -167,22 +167,22 @@ async fn closure_complete(
 /// traversed (not rebuilt) so the drvs producing the dangling paths get planned.
 /// Returns the drvs to build, leaves first.
 async fn plan_missing(
-    top: &StorePath<String>,
+    top: &StorePath,
     path_info_service: &Arc<dyn PathInfoService>,
-) -> Result<Vec<StorePath<String>>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Vec<StorePath>, Box<dyn std::error::Error + Send + Sync>> {
     // drv -> (needs building, its input drvs); recorded for built AND traversed drvs so topo
     // dependencies propagate through present-but-dangling intermediates.
-    let mut graph: HashMap<StorePath<String>, (bool, Vec<StorePath<String>>)> = HashMap::new();
+    let mut graph: HashMap<StorePath, (bool, Vec<StorePath>)> = HashMap::new();
     // (drv, output name) pairs already checked (or scheduled on the frontier)
-    let mut checked: HashSet<(StorePath<String>, String)> = HashSet::new();
-    let mut complete: HashSet<StorePath<String>> = HashSet::new();
+    let mut checked: HashSet<(StorePath, nix_compat::derivation::OutputName)> = HashSet::new();
+    let mut complete: HashSet<StorePath> = HashSet::new();
 
     let top_drv = read_drv(top);
-    let top_outs: Vec<String> = top_drv.outputs.keys().cloned().collect();
-    let mut frontier: VecDeque<(StorePath<String>, Vec<String>)> =
+    let top_outs: Vec<nix_compat::derivation::OutputName> = top_drv.outputs.keys().cloned().collect();
+    let mut frontier: VecDeque<(StorePath, Vec<nix_compat::derivation::OutputName>)> =
         VecDeque::from([(top.clone(), top_outs)]);
     while let Some((d, outs)) = frontier.pop_front() {
-        let outs: Vec<String> = outs
+        let outs: Vec<nix_compat::derivation::OutputName> = outs
             .into_iter()
             .filter(|o| checked.insert((d.clone(), o.clone())))
             .collect();
@@ -190,7 +190,7 @@ async fn plan_missing(
             continue;
         }
         let drv = read_drv(&d);
-        let out_paths: Vec<StorePath<String>> = outs
+        let out_paths: Vec<StorePath> = outs
             .iter()
             .map(|o| {
                 drv.outputs
@@ -223,7 +223,7 @@ async fn plan_missing(
             }
             None => {}
         }
-        let children: Vec<StorePath<String>> =
+        let children: Vec<StorePath> =
             drv.input_derivations.keys().cloned().collect();
         for (c, couts) in &drv.input_derivations {
             frontier.push_back((c.clone(), couts.iter().cloned().collect()));
@@ -232,11 +232,11 @@ async fn plan_missing(
     }
 
     // Topo-sort the recorded drvs (children before parents), then keep only the ones to build.
-    let mut order: Vec<StorePath<String>> = Vec::with_capacity(graph.len());
-    let mut done: HashSet<StorePath<String>> = HashSet::new();
+    let mut order: Vec<StorePath> = Vec::with_capacity(graph.len());
+    let mut done: HashSet<StorePath> = HashSet::new();
     while order.len() < graph.len() {
         let mut progressed = false;
-        let mut ready: Vec<StorePath<String>> = graph
+        let mut ready: Vec<StorePath> = graph
             .iter()
             .filter(|(d, (_, deps))| {
                 !done.contains(*d)
@@ -262,8 +262,8 @@ async fn plan_missing(
 
 /// The declared inputs of a drv: input_sources + each input derivation's requested output paths
 /// (read from the input .drv itself, since we have no eval-populated known_paths).
-fn declared_input_seeds(drv: &Derivation) -> Vec<StorePath<String>> {
-    let mut seeds: Vec<StorePath<String>> = drv.input_sources.iter().cloned().collect();
+fn declared_input_seeds(drv: &Derivation) -> Vec<StorePath> {
+    let mut seeds: Vec<StorePath> = drv.input_sources.iter().cloned().collect();
     for (idrv_path, outs) in &drv.input_derivations {
         let idrv = read_drv(idrv_path);
         for out in outs {
@@ -287,23 +287,23 @@ fn declared_input_seeds(drv: &Derivation) -> Vec<StorePath<String>> {
 /// Paths without PathInfo are returned as missing (their references can't be expanded);
 /// `skip` paths are not resolved at all (used for outputs that a planned earlier build produces).
 async fn resolve_input_closure(
-    seeds: Vec<StorePath<String>>,
-    skip: &HashSet<StorePath<String>>,
+    seeds: Vec<StorePath>,
+    skip: &HashSet<StorePath>,
     services: &Services,
 ) -> Result<
-    (BTreeMap<StorePath<String>, Node>, Vec<StorePath<String>>),
+    (BTreeMap<StorePath, Node>, Vec<StorePath>),
     Box<dyn std::error::Error + Send + Sync>,
 > {
-    let mut visited: HashSet<StorePath<String>> = HashSet::new();
-    let mut resolved_inputs: BTreeMap<StorePath<String>, Node> = BTreeMap::new();
-    let mut missing: Vec<StorePath<String>> = Vec::new();
-    let mut frontier: Vec<StorePath<String>> = seeds;
+    let mut visited: HashSet<StorePath> = HashSet::new();
+    let mut resolved_inputs: BTreeMap<StorePath, Node> = BTreeMap::new();
+    let mut missing: Vec<StorePath> = Vec::new();
+    let mut frontier: Vec<StorePath> = seeds;
     while !frontier.is_empty() {
-        let to_fetch: Vec<StorePath<String>> = frontier
+        let to_fetch: Vec<StorePath> = frontier
             .into_iter()
             .filter(|sp| !skip.contains(sp) && visited.insert(sp.clone()))
             .collect();
-        let infos: Vec<(StorePath<String>, Option<PathInfo>)> =
+        let infos: Vec<(StorePath, Option<PathInfo>)> =
             futures::stream::iter(to_fetch.into_iter())
                 .map(|sp| {
                     let path_info_service = services.path_info_service.clone();
@@ -338,7 +338,7 @@ async fn resolve_input_closure(
 
 /// Build one drv whose full input closure is present in castore; persist output PathInfo.
 async fn build_one(
-    drv_path: &StorePath<String>,
+    drv_path: &StorePath,
     services: &Services,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let drv = read_drv(drv_path);
@@ -367,7 +367,7 @@ async fn build_one(
     // Precompute the `ca` field (only set for fixed-output derivations).
     let mut ca = drv
         .fod_digest()
-        .map(|fod_digest| CAHash::Nar(NixHash::Sha256(fod_digest)));
+        .map(|fod_digest| CAHash::Nar(fod_digest.into()));
 
     let mut build_request = derivation_into_build_request(drv, &resolved_inputs)?;
 
@@ -381,12 +381,12 @@ async fn build_one(
 
     // Map refscan-needle indexes back to store paths: outputs first, then the input closure
     // (same order derivation_into_build_request assembles refscan_needles).
-    let mut output_paths: Vec<StorePath<String>> = Vec::with_capacity(build_request.outputs.len());
-    let all_possible_refs: Vec<StorePath<String>> = build_request
+    let mut output_paths: Vec<StorePath> = Vec::with_capacity(build_request.outputs.len());
+    let all_possible_refs: Vec<StorePath> = build_request
         .outputs
         .iter()
         .map(|p| {
-            let sp = StorePath::<String>::from_bytes(
+            let sp = StorePath::from_bytes(
                 p.strip_prefix(&STORE_DIR[1..])
                     .expect("output doesn't have expected store_dir prefix")
                     .as_os_str()
@@ -409,7 +409,7 @@ async fn build_one(
     for (output, output_path) in build_result.outputs.into_iter().zip(output_paths) {
         let (nar_size, nar_sha256) = nar_calculation_service.calculate_nar(&output.node).await?;
 
-        let mut references: Vec<StorePath<String>> = Vec::with_capacity(output.output_needles.len());
+        let mut references: Vec<StorePath> = Vec::with_capacity(output.output_needles.len());
         for needle_idx in output.output_needles {
             references.push(
                 all_possible_refs
@@ -475,7 +475,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }),
     };
 
-    let drv_path = StorePath::<String>::from_bytes(
+    let drv_path = StorePath::from_bytes(
         Path::new(&args.drv).file_name().expect("drv path").as_bytes(),
     )?;
 
@@ -485,7 +485,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // The top drv's outputs, reported at the end (built or already present) so a driver can
     // read the result paths without knowing the graph.
-    let top_outputs: Vec<StorePath<String>> = read_drv(&drv_path)
+    let top_outputs: Vec<StorePath> = read_drv(&drv_path)
         .outputs
         .values()
         .map(|o| o.path.clone().expect("drv output has no store path"))
@@ -510,7 +510,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Pre-check every planned build's declared input closure and report ALL missing paths in one
     // shot (exit 3), so a driver can substitute/ingest them and retry, instead of failing one
     // missing path at a time. Outputs of planned drvs will exist once their build runs — skip them.
-    let planned_outputs: HashSet<StorePath<String>> = plan
+    let planned_outputs: HashSet<StorePath> = plan
         .iter()
         .flat_map(|d| {
             read_drv(d)
@@ -520,7 +520,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .collect::<Vec<_>>()
         })
         .collect();
-    let mut missing_all: std::collections::BTreeSet<StorePath<String>> = Default::default();
+    let mut missing_all: std::collections::BTreeSet<StorePath> = Default::default();
     for d in &plan {
         let seeds = declared_input_seeds(&read_drv(d));
         let (_, missing) = resolve_input_closure(seeds, &planned_outputs, &services).await?;
