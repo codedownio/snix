@@ -109,7 +109,7 @@ mod import_builtins {
     use super::*;
 
     use crate::builtins::ImportError;
-    use crate::snix_store_io::SnixStoreIO;
+    use crate::snix_store_io::{SnixStoreIO, parse_store_and_sub_path};
     use bstr::ByteSlice;
     use nix_compat::nixhash::{CAHash, HashAlgo, NixHash};
     use nix_compat::store_path::{
@@ -210,8 +210,9 @@ mod import_builtins {
             }
         };
         // As a first step, we ingest the contents, and get back a root node,
-        // and optionally the sha256 a flat file.
-        let (root_node, ca) = match std::fs::metadata(&path)?.file_type().into() {
+        // and optionally the sha256 a flat file. Ask the store IO for the file type (not
+        // std::fs) — the source may live only in castore with nothing on the real filesystem.
+        let (root_node, ca) = match state.file_type(&path)? {
             // Check if the path points to a regular file.
             // If it does, the filter function is never executed, and we copy to the blobservice directly.
             // If recursive is false, we need to calculate the sha256 digest of the raw contents,
@@ -262,11 +263,33 @@ mod import_builtins {
                 return Err(ImportError::FlatImportOfNonFile(path))?;
             }
 
-            // do the filtered ingest
-            FileType::Directory => (
-                filtered_ingest(state.clone(), co, path.as_ref(), filter).await?,
-                None,
-            ),
+            // Directory. When the source already lives in castore (e.g. a subpath of nixpkgs in a
+            // full-snix eval, nothing materialized on the real fs) and there's no filter to apply,
+            // take the castore node directly instead of walking the filesystem. A filter still
+            // requires the filesystem walk (FUTUREWORK: walk castore applying the filter).
+            FileType::Directory => {
+                // Store ops run on the tokio runtime, not the generator's executor — block_on,
+                // don't `.await` (like the NAR calc below).
+                let castore_node = if filter.is_none() {
+                    if let Ok((store_path, sub_path)) = parse_store_and_sub_path(&path) {
+                        state
+                            .tokio_handle
+                            .block_on(state.store_path_to_path_info(&store_path, sub_path))?
+                            .map(|pi| pi.node)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                match castore_node {
+                    Some(node) => (node, None),
+                    None => (
+                        filtered_ingest(state.clone(), co, path.as_ref(), filter).await?,
+                        None,
+                    ),
+                }
+            }
             FileType::Symlink => {
                 // FUTUREWORK: Nix follows a symlink if it's at the root,
                 // except if it's not resolve-able (NixOS/nix#7761).
