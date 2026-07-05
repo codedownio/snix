@@ -133,7 +133,7 @@ pub async fn construct_services(
         Arc<dyn BlobService>,
         Arc<dyn DirectoryService>,
         Arc<dyn PathInfoService>,
-        Box<dyn NarCalculationService>,
+        Arc<dyn NarCalculationService>,
     ),
     Box<dyn std::error::Error + Send + Sync>,
 > {
@@ -149,7 +149,7 @@ pub async fn construct_services_from_configs(
         Arc<dyn BlobService>,
         Arc<dyn DirectoryService>,
         Arc<dyn PathInfoService>,
-        Box<dyn NarCalculationService>,
+        Arc<dyn NarCalculationService>,
     ),
     Box<dyn std::error::Error + Send + Sync>,
 > {
@@ -166,10 +166,10 @@ pub async fn construct_services_from_configs(
     // HACK: The grpc client also implements NarCalculationService, and we
     // really want to use it (otherwise we'd need to fetch everything again for hashing).
     // Until we revamped store composition and config, detect this special case here.
-    let nar_calculation_service: Box<dyn NarCalculationService> = path_info_service
+    let nar_calculation_service: Arc<dyn NarCalculationService> = path_info_service
         .nar_calculation_service()
         .unwrap_or_else(|| {
-            Box::new(SimpleRenderer::new(
+            Arc::new(SimpleRenderer::new(
                 blob_service.clone(),
                 directory_service.clone(),
             ))

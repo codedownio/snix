@@ -88,7 +88,7 @@ mod tests {
             blob_service,
             directory_service,
             path_info_service,
-            nar_calculation_service.into(),
+            nar_calculation_service,
             Arc::<DummyBuildService>::default(),
             runtime.handle().clone(),
             Vec::new(),

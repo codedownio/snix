@@ -92,8 +92,8 @@ where
     }
 
     #[instrument(level = "trace", skip_all)]
-    fn nar_calculation_service(&self) -> Option<Box<dyn NarCalculationService>> {
-        Some(Box::new(self.clone()) as Box<dyn NarCalculationService>)
+    fn nar_calculation_service(&self) -> Option<Arc<dyn NarCalculationService>> {
+        Some(Arc::new(self.clone()) as Arc<dyn NarCalculationService>)
     }
 }
 

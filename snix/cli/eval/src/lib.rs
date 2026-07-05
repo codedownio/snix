@@ -46,7 +46,7 @@ pub async fn init_io_handle(args: &Args) -> SnixStoreIO {
         blob_service,
         directory_service,
         path_info_service,
-        nar_calculation_service.into(),
+        nar_calculation_service,
         build_service,
         tokio::runtime::Handle::current(),
         args.hashed_mirrors.clone(),

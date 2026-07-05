@@ -18,7 +18,6 @@ use snix_store::decompression::DecompressedReader;
 use snix_store::nar::NarCalculationService;
 use snix_store::utils::ServiceUrls;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tonic::transport::Server;
 use tracing::{Instrument, Span, debug, info, info_span, warn};
@@ -300,10 +299,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // FUTUREWORK: allow flat for single files?
             let (blob_service, directory_service, path_info_service, nar_calculation_service) =
                 snix_store::utils::construct_services(service_addrs).await?;
-
-            // Arc NarCalculationService, as we clone it .
-            let nar_calculation_service: Arc<dyn NarCalculationService> =
-                nar_calculation_service.into();
 
             // For each path passed, construct the name, or bail out if it's invalid.
             let paths_and_names = paths

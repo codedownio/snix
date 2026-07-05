@@ -9,6 +9,8 @@ mod signing_wrapper;
 #[cfg(test)]
 mod tests;
 
+use std::sync::Arc;
+
 use auto_impl::auto_impl;
 use futures::stream::BoxStream;
 use snix_castore::composition::{Registry, ServiceBuilder};
@@ -71,7 +73,7 @@ pub trait PathInfoService: Send + Sync {
 
     /// Returns a (more) suitable NarCalculationService.
     /// This can be used to offload NAR calculation to the remote side.
-    fn nar_calculation_service(&self) -> Option<Box<dyn NarCalculationService>> {
+    fn nar_calculation_service(&self) -> Option<Arc<dyn NarCalculationService>> {
         None
     }
 }
