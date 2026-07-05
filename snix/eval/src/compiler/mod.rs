@@ -1466,10 +1466,14 @@ impl Compiler<'_, '_> {
             _ => {
                 let span = self.span_for(node);
                 let pos = self.file.find_line_col(span.low());
-                let abs_path = std::fs::canonicalize(self.file.name())
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
+                // Fall back to the name as-is when it can't be canonicalized: a source file that
+                // lives only in a virtual store (castore, remote store) isn't on the real
+                // filesystem, and store paths are already absolute, so canonicalization is a no-op
+                // for them. (Was `.unwrap()`, which panicked for such files.)
+                let name = self.file.name();
+                let abs_path = std::fs::canonicalize(name)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| name.to_string());
                 let attrs = NixAttrs::from_iter([
                     ("line", Value::Integer((pos.line + 1) as i64)),
                     ("column", Value::Integer((pos.column + 1) as i64)),
