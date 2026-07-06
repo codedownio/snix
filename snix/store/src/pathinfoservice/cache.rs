@@ -19,6 +19,7 @@ pub struct Cache<PS1, PS2> {
     instance_name: String,
     near: PS1,
     far: PS2,
+    write_far: bool,
 }
 
 impl<PS1, PS2> Cache<PS1, PS2> {
@@ -27,6 +28,7 @@ impl<PS1, PS2> Cache<PS1, PS2> {
             instance_name,
             near,
             far,
+            write_far: false,
         }
     }
 }
@@ -46,7 +48,10 @@ where
             }
             None => {
                 debug!("not found in near, asking remote…");
-                match self.far.get(digest).await.map_err(Error::FarGet)? {
+                let t_far = std::time::Instant::now();
+                let far_result = self.far.get(digest).await.map_err(Error::FarGet)?;
+                crate::perf_stats::SUBSTITUTE.record(t_far);
+                match far_result {
                     None => Ok(None),
                     Some(path_info) => {
                         debug!("found in remote, adding to cache");
@@ -71,7 +76,18 @@ where
     async fn put(&self, path_info: PathInfo) -> Result<PathInfo, pathinfoservice::Error> {
         // Write through to near, so the cache can serve as the root store of a
         // writable composition (e.g. local store fronted by a substituter).
-        Ok(self.near.put(path_info).await.map_err(Error::NearPut)?)
+        // With `write_far`, far is the durable side; near is warmed so
+        // subsequent reads of what we just wrote are cache hits.
+        if self.write_far {
+            let path_info = self.far.put(path_info).await.map_err(Error::FarPut)?;
+            self.near
+                .put(path_info.clone())
+                .await
+                .map_err(Error::NearPut)?;
+            Ok(path_info)
+        } else {
+            Ok(self.near.put(path_info).await.map_err(Error::NearPut)?)
+        }
     }
 
     fn list(&self) -> BoxStream<'static, Result<PathInfo, pathinfoservice::Error>> {
@@ -85,6 +101,8 @@ where
 pub struct CacheConfig {
     pub near: String,
     pub far: String,
+    #[serde(default)]
+    pub write_far: bool,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -98,6 +116,8 @@ pub enum Error {
     NearPut(#[source] pathinfoservice::Error),
     #[error("getting from far: {0}")]
     FarGet(#[source] pathinfoservice::Error),
+    #[error("putting into far: {0}")]
+    FarPut(#[source] pathinfoservice::Error),
 }
 
 impl TryFrom<url::Url> for CacheConfig {
@@ -123,6 +143,7 @@ impl ServiceBuilder for CacheConfig {
             instance_name: instance_name.to_string(),
             near: near?,
             far: far?,
+            write_far: self.write_far,
         }))
     }
 }

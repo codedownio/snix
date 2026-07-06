@@ -8,7 +8,7 @@ use tracing::{instrument, trace};
 
 use crate::composition::{CompositionContext, ServiceBuilder};
 use crate::directoryservice::directory_graph::DirectoryGraphBuilder;
-use crate::directoryservice::{self, DirectoryPutter, DirectoryService, SimplePutter};
+use crate::directoryservice::{self, DirectoryPutter, DirectoryService};
 use crate::{B3Digest, Directory};
 
 /// Asks near first, if not found, asks far.
@@ -147,7 +147,37 @@ where
 
     #[instrument(skip_all)]
     fn put_multiple_start(&self) -> Box<dyn DirectoryPutter + '_> {
-        Box::new(SimplePutter::new(self))
+        // Stream to far in one putter (far may validate closure connectivity per stream, e.g.
+        // grpc), warming near along the way.
+        Box::new(TeePutter {
+            far: self.far.put_multiple_start(),
+            near: self.near.put_multiple_start(),
+        })
+    }
+}
+
+/// Feeds a directory stream to both sides of a [Cache]: far is the durable side (its close
+/// digest is returned), near is warmed so subsequent reads are cache hits.
+struct TeePutter<'a> {
+    far: Box<dyn DirectoryPutter + 'a>,
+    near: Box<dyn DirectoryPutter + 'a>,
+}
+
+#[async_trait]
+impl DirectoryPutter for TeePutter<'_> {
+    async fn put(&mut self, directory: Directory) -> Result<(), directoryservice::Error> {
+        self.far
+            .put(directory.clone())
+            .await
+            .map_err(Error::FarPut)?;
+        self.near.put(directory).await.map_err(Error::NearPut)?;
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<B3Digest, directoryservice::Error> {
+        let digest = self.far.close().await.map_err(Error::FarPut)?;
+        self.near.close().await.map_err(Error::NearPut)?;
+        Ok(digest)
     }
 }
 
