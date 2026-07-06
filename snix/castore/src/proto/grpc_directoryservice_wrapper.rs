@@ -92,6 +92,17 @@ where
                 directory.try_into().map_err(|e: DirectoryError| {
                     tonic::Status::new(tonic::Code::Internal, e.to_string())
                 })?;
+            // Allow partial puts: a stream may reference subtrees already in the backing
+            // store without re-streaming them (e.g. a filtered tree sharing subtrees with
+            // a previously ingested one).
+            for (_, node) in directory.nodes() {
+                if let crate::Node::Directory { digest, .. } = node
+                    && !validator.is_accepted(digest)
+                    && let Ok(Some(d)) = self.directory_service.get(digest).await
+                {
+                    validator.accept_external(digest.clone(), d.size());
+                }
+            }
             validator
                 .try_accept(&directory)
                 .map_err(|e| tonic::Status::new(tonic::Code::Internal, e.to_string()))?;
