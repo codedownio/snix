@@ -66,7 +66,17 @@ fn lint<E: Write + Clone + Send>(
     result.errors.is_empty()
 }
 
+/// Phase breakdown of the run (see snix_store::perf_stats); consumed by nox-builder.
+fn print_phase_stats(started: std::time::Instant) {
+    eprintln!(
+        "fullsnix-phase-stats {{\"wall\":{{\"secs\":{:.3},\"count\":1}},{}",
+        started.elapsed().as_secs_f64(),
+        &snix_store::perf_stats::report_json()[1..]
+    );
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let t_main = std::time::Instant::now();
     let args = Args::parse();
 
     // Diagnostic: name the generator being resumed when a panic fires (e.g. the genawaiter
@@ -96,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(file) = &args.script {
         run_file(&mut stdout, &mut stderr, io_handle, file.clone(), &args)
     } else if let Some(expr) = &args.expr {
-        if !interpret(
+        let success = interpret(
             &mut stderr,
             io_handle,
             expr,
@@ -109,8 +119,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             None,
         )
         .unwrap()
-        .finalize(&mut stdout)
-        {
+        .finalize(&mut stdout);
+        print_phase_stats(t_main);
+        if !success {
             std::process::exit(1);
         }
     } else {

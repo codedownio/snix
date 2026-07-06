@@ -6,6 +6,7 @@ pub mod fixtures;
 pub mod import;
 pub mod nar;
 pub mod path_info;
+pub mod perf_stats;
 pub mod pathinfoservice;
 pub mod proto;
 pub mod utils;

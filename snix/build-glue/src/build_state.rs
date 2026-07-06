@@ -94,13 +94,15 @@ impl BuildState {
         // produced that would build it, fall back to triggering the build.
         // To populate the input nodes, it might recursively trigger builds of
         // its dependencies too.
-        let mut path_info = if let Some(path_info) = self
+        let t_pi = std::time::Instant::now();
+        let looked_up = self
             .path_info_service
             .as_ref()
             .get(*store_path.digest())
             .await
-            .map_err(std::io::Error::other)?
-        {
+            .map_err(std::io::Error::other)?;
+        snix_store::perf_stats::PATHINFO_GET.record(t_pi);
+        let mut path_info = if let Some(path_info) = looked_up {
             path_info
         } else {
             // If there's no PathInfo found, this normally means we have to
@@ -123,11 +125,13 @@ impl BuildState {
                 .borrow()
                 .get_fetch_for_output_path(store_path);
             if let Some((name, fetch)) = maybe_fetch {
+                let t_fetch = std::time::Instant::now();
                 let (sp, path_info) = self
                     .fetcher
                     .ingest_and_persist(&name, fetch)
                     .await
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                snix_store::perf_stats::FETCH.record(t_fetch);
 
                 debug_assert_eq!(
                     sp.to_absolute_path(),
@@ -208,23 +212,27 @@ impl BuildState {
                 span.pb_set_message(&format!("🔨Building {}", &store_path));
 
                 // create a build
+                let t_build = std::time::Instant::now();
                 let build_result = self
                     .build_service
                     .as_ref()
                     .do_build(build_request)
                     .await
                     .map_err(std::io::Error::other)?;
+                snix_store::perf_stats::BUILD.record(t_build);
 
                 let mut out_path_info: Option<PathInfo> = None;
 
                 // For each output, insert a PathInfo.
                 for (output, output_path) in build_result.outputs.into_iter().zip(output_paths) {
                     // calculate the nar representation
+                    let t_nar = std::time::Instant::now();
                     let (nar_size, nar_sha256) = self
                         .nar_calculation_service
                         .calculate_nar(&output.node)
                         .await
                         .map_err(std::io::Error::other)?;
+                    snix_store::perf_stats::NAR_CALC.record(t_nar);
 
                     // assemble the PathInfo to persist
                     let path_info = PathInfo {
@@ -278,14 +286,14 @@ impl BuildState {
         };
 
         // now with the root_node and sub_path, descend to the node requested.
-        Ok(
-            descend_to(&self.directory_service, path_info.node.clone(), sub_path)
-                .await
-                .map_err(std::io::Error::other)?
-                .map(|node| {
-                    path_info.node = node;
-                    path_info
-                }),
-        )
+        let t_descend = std::time::Instant::now();
+        let node = descend_to(&self.directory_service, path_info.node.clone(), sub_path)
+            .await
+            .map_err(std::io::Error::other)?;
+        snix_store::perf_stats::DESCEND.record(t_descend);
+        Ok(node.map(|node| {
+            path_info.node = node;
+            path_info
+        }))
     }
 }

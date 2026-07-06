@@ -37,6 +37,11 @@ pub struct SnixStoreIO {
 
     std_io: StdIO,
     pub(crate) tokio_handle: tokio::runtime::Handle,
+
+    /// Memoizes positive (store_path, sub_path) lookups: store paths are immutable within
+    /// one evaluation, and the eval surface re-resolves the same paths tens of thousands of
+    /// times (each one a pathinfo get plus a directory walk).
+    lookup_cache: std::cell::RefCell<std::collections::HashMap<([u8; 20], Vec<u8>), PathInfo>>,
 }
 
 impl SnixStoreIO {
@@ -60,6 +65,7 @@ impl SnixStoreIO {
             ),
             std_io: StdIO {},
             tokio_handle,
+            lookup_cache: Default::default(),
         }
     }
 
@@ -88,9 +94,20 @@ impl SnixStoreIO {
         store_path: &StorePathRef<'_>,
         sub_path: &snix_castore::Path,
     ) -> io::Result<Option<PathInfo>> {
-        self.build_state
+        let key = (*store_path.digest(), sub_path.as_ref().as_bytes().to_vec());
+        if let Some(path_info) = self.lookup_cache.borrow().get(&key) {
+            return Ok(Some(path_info.clone()));
+        }
+        let resolved = self
+            .build_state
             .store_path_to_path_info(store_path, sub_path)
-            .await
+            .await?;
+        if let Some(path_info) = &resolved {
+            self.lookup_cache
+                .borrow_mut()
+                .insert(key, path_info.clone());
+        }
+        Ok(resolved)
     }
 
     /// Re-key an already-in-castore [Node] as a recursive NAR-content-addressed store path and
@@ -195,12 +212,14 @@ impl EvalIO for SnixStoreIO {
                             ))
                         }
                         Node::File { digest, .. } => {
+                            let t_blob = std::time::Instant::now();
                             let resp = self
                                 .build_state
                                 .blob_service
                                 .as_ref()
                                 .open_read(&digest)
                                 .await?;
+                            snix_store::perf_stats::BLOB_READ.record(t_blob);
                             match resp {
                                 Some(blob_reader) => {
                                     // The VM Response needs a sync [std::io::Reader].
@@ -261,6 +280,7 @@ impl EvalIO for SnixStoreIO {
                     match path_info.node {
                         Node::Directory { digest, .. } => {
                             // fetch the Directory itself.
+                            let t_dir = std::time::Instant::now();
                             let directory = self
                                 .build_state
                                 .directory_service
@@ -280,6 +300,7 @@ impl EvalIO for SnixStoreIO {
                                         format!("directory {digest} does not exist"),
                                     )
                                 })?;
+                            snix_store::perf_stats::DIR_GET.record(t_dir);
 
                             // construct children from nodes
                             Ok(directory
