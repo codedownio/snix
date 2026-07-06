@@ -62,12 +62,13 @@ where
 {
     #[instrument(skip(self, digest), fields(blob.digest=%digest, instance_name=%self.instance_name))]
     async fn has(&self, digest: &B3Digest) -> std::io::Result<bool> {
-        Ok(self.near.has(digest).await? || self.far.has(digest).await?)
+        // Near failures are misses: far is the durable side.
+        Ok(self.near.has(digest).await.unwrap_or(false) || self.far.has(digest).await?)
     }
 
     #[instrument(skip(self, digest), fields(blob.digest=%digest, instance_name=%self.instance_name), err)]
     async fn open_read(&self, digest: &B3Digest) -> std::io::Result<Option<Box<dyn BlobReader>>> {
-        if self.near.has(digest).await? {
+        if self.near.has(digest).await.unwrap_or(false) {
             // near store has the blob, so we can assume it also has all chunks.
             self.near.open_read(digest).await
         } else {
@@ -133,6 +134,7 @@ where
                 far: self.far.open_write().await,
                 near: self.near.open_write().await,
                 pending: Vec::new(),
+                near_dead: false,
             })
         } else {
             self.near.open_write().await
@@ -141,12 +143,14 @@ where
 }
 
 /// Writes to both sides of a write-far [Cache]; far is the durable side (its digest is
-/// returned, and a near/far digest mismatch is an error). far is polled first; bytes it
-/// accepts are owed to near (`pending`) and drained before accepting more.
+/// returned). far is polled first; bytes it accepts are owed to near (`pending`) and drained
+/// before accepting more. Near failures stop the mirroring but never fail the write (an
+/// unfinished near writer is simply never closed, so nothing partial becomes readable).
 struct TeeBlobWriter {
     far: Box<dyn BlobWriter>,
     near: Box<dyn BlobWriter>,
     pending: Vec<u8>,
+    near_dead: bool,
 }
 
 impl TeeBlobWriter {
@@ -155,13 +159,27 @@ impl TeeBlobWriter {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        let Self { near, pending, .. } = self;
+        let Self {
+            near,
+            pending,
+            near_dead,
+            ..
+        } = self;
+        if *near_dead {
+            pending.clear();
+            return std::task::Poll::Ready(Ok(()));
+        }
         while !pending.is_empty() {
             match std::pin::Pin::new(&mut **near).poll_write(cx, pending) {
                 std::task::Poll::Ready(Ok(n)) => {
                     pending.drain(..n);
                 }
-                std::task::Poll::Ready(Err(e)) => return std::task::Poll::Ready(Err(e)),
+                std::task::Poll::Ready(Err(e)) => {
+                    tracing::warn!(error = %e, "near blob write failed, no longer mirroring");
+                    *near_dead = true;
+                    pending.clear();
+                    break;
+                }
                 std::task::Poll::Pending => return std::task::Poll::Pending,
             }
         }
@@ -197,7 +215,9 @@ impl tokio::io::AsyncWrite for TeeBlobWriter {
             other => return other,
         }
         match std::pin::Pin::new(&mut self.far).poll_flush(cx) {
-            std::task::Poll::Ready(Ok(())) => std::pin::Pin::new(&mut self.near).poll_flush(cx),
+            std::task::Poll::Ready(Ok(())) if !self.near_dead => {
+                std::pin::Pin::new(&mut self.near).poll_flush(cx)
+            }
             other => other,
         }
     }
@@ -211,7 +231,9 @@ impl tokio::io::AsyncWrite for TeeBlobWriter {
             other => return other,
         }
         match std::pin::Pin::new(&mut self.far).poll_shutdown(cx) {
-            std::task::Poll::Ready(Ok(())) => std::pin::Pin::new(&mut self.near).poll_shutdown(cx),
+            std::task::Poll::Ready(Ok(())) if !self.near_dead => {
+                std::pin::Pin::new(&mut self.near).poll_shutdown(cx)
+            }
             other => other,
         }
     }
@@ -220,16 +242,22 @@ impl tokio::io::AsyncWrite for TeeBlobWriter {
 #[async_trait]
 impl BlobWriter for TeeBlobWriter {
     async fn close(&mut self) -> std::io::Result<B3Digest> {
-        if !self.pending.is_empty() {
+        if !self.pending.is_empty() && !self.near_dead {
             let pending = std::mem::take(&mut self.pending);
-            tokio::io::AsyncWriteExt::write_all(&mut self.near, &pending).await?;
+            if let Err(e) = tokio::io::AsyncWriteExt::write_all(&mut self.near, &pending).await {
+                tracing::warn!(error = %e, "near blob write failed, no longer mirroring");
+                self.near_dead = true;
+            }
         }
         let far_digest = self.far.close().await?;
-        let near_digest = self.near.close().await?;
-        if far_digest != near_digest {
-            return Err(std::io::Error::other(
-                "near/far blob digests diverged in tee write",
-            ));
+        if !self.near_dead {
+            match self.near.close().await {
+                Ok(near_digest) if near_digest != far_digest => {
+                    tracing::warn!(%near_digest, %far_digest, "near/far blob digests diverged");
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "near blob close failed"),
+            }
         }
         Ok(far_digest)
     }

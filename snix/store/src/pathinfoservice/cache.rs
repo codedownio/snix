@@ -41,13 +41,18 @@ where
 {
     #[instrument(level = "trace", skip_all, fields(path_info.digest = nixbase32::encode(&digest), instance_name = %self.instance_name))]
     async fn get(&self, digest: [u8; 20]) -> Result<Option<PathInfo>, pathinfoservice::Error> {
-        match self.near.get(digest).await.map_err(Error::NearGet)? {
-            Some(path_info) => {
+        // A near failure is treated as a miss: far is the durable side.
+        match self.near.get(digest).await {
+            Ok(Some(path_info)) => {
                 debug!("serving from cache");
                 Ok(Some(path_info))
             }
-            None => {
-                debug!("not found in near, asking remote…");
+            near_result => {
+                if let Err(e) = near_result {
+                    tracing::warn!(error = %e, "near get failed, asking far");
+                } else {
+                    debug!("not found in near, asking remote…");
+                }
                 let t_far = std::time::Instant::now();
                 let far_result = self.far.get(digest).await.map_err(Error::FarGet)?;
                 crate::perf_stats::SUBSTITUTE.record(t_far);
@@ -55,10 +60,9 @@ where
                     None => Ok(None),
                     Some(path_info) => {
                         debug!("found in remote, adding to cache");
-                        self.near
-                            .put(path_info.clone())
-                            .await
-                            .map_err(Error::NearPut)?;
+                        if let Err(e) = self.near.put(path_info.clone()).await {
+                            tracing::warn!(error = %e, "failed to populate near cache");
+                        }
                         Ok(Some(path_info))
                     }
                 }
@@ -69,7 +73,7 @@ where
     #[instrument(level = "trace", skip_all, fields(path_info.digest = nixbase32::encode(&digest), instance_name = %self.instance_name))]
     async fn has(&self, digest: [u8; 20]) -> Result<bool, pathinfoservice::Error> {
         // FUTUREWORK: queue background tasks if ! self.near.has && self.far.has ? (configurable)
-        Ok(self.near.has(digest).await.map_err(Error::NearGet)?
+        Ok(self.near.has(digest).await.unwrap_or(false)
             || self.far.has(digest).await.map_err(Error::FarGet)?)
     }
 
@@ -80,10 +84,9 @@ where
         // subsequent reads of what we just wrote are cache hits.
         if self.write_far {
             let path_info = self.far.put(path_info).await.map_err(Error::FarPut)?;
-            self.near
-                .put(path_info.clone())
-                .await
-                .map_err(Error::NearPut)?;
+            if let Err(e) = self.near.put(path_info.clone()).await {
+                tracing::warn!(error = %e, "failed to warm near cache on put");
+            }
             Ok(path_info)
         } else {
             Ok(self.near.put(path_info).await.map_err(Error::NearPut)?)
