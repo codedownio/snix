@@ -48,6 +48,7 @@ impl<BS, DS> BubblewrapBuildService<BS, DS> {
         directory_service: DS,
         external_store: Option<PathBuf>,
         userns: bool,
+        concurrency: usize,
     ) -> Self {
         // We map root inside the container to the uid/gid this is running at,
         // and allocate one for uid 1000 into the container from the range we
@@ -59,7 +60,7 @@ impl<BS, DS> BubblewrapBuildService<BS, DS> {
             directory_service,
             external_store,
             userns,
-            concurrent_builds: tokio::sync::Semaphore::new(2),
+            concurrent_builds: tokio::sync::Semaphore::new(concurrency),
         }
     }
 }
