@@ -211,6 +211,13 @@ impl BuildState {
 
                 span.pb_set_message(&format!("🔨Building {}", &store_path));
 
+                // When driven by nox (NOX_SNIX_BUILD_LOG set), print per-derivation
+                // sentinel lines the nox builder parses into build-progress activities.
+                let nox_build_log = std::env::var_os("NOX_SNIX_BUILD_LOG").is_some();
+                if nox_build_log {
+                    eprintln!("NOX_BUILD_START /nix/store/{drv_path}");
+                }
+
                 // create a build
                 let t_build = std::time::Instant::now();
                 let build_result = self
@@ -220,6 +227,12 @@ impl BuildState {
                     .await
                     .map_err(std::io::Error::other)?;
                 snix_store::perf_stats::BUILD.record(t_build);
+                if nox_build_log {
+                    eprintln!(
+                        "NOX_BUILD_DONE /nix/store/{drv_path} {:.1}",
+                        t_build.elapsed().as_secs_f64()
+                    );
+                }
 
                 let mut out_path_info: Option<PathInfo> = None;
 
