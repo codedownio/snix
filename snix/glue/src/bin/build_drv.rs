@@ -58,6 +58,13 @@ struct Args {
     /// which makes stdenv's enableParallelBuilding build single-threaded.
     #[arg(long)]
     cores: Option<usize>,
+
+    /// After a `--recursive` build, print the top drv's full build-time input closure as
+    /// `INPUT_PATH /nix/store/…` lines on stdout. A driver (nox) records these as GC roots so build
+    /// inputs aren't reclaimed and re-fetched on rebuilds — the closure is read straight from the
+    /// .drv files, so it works even when the drvs are unregistered (lazy-derivation-writes).
+    #[arg(long)]
+    print_input_closure: bool,
 }
 
 /// Where to look for `.drv` aterm files; set once from --drv-dir at startup, /nix/store last.
@@ -280,6 +287,36 @@ fn declared_input_seeds(drv: &Derivation) -> Vec<StorePath> {
     seeds
 }
 
+/// Every store path in the top drv's build-time closure: each derivation reachable through
+/// `input_derivations` contributes its declared output paths and its `input_sources`. Read straight
+/// from the `.drv` files (via `read_drv`/`DRV_DIRS`), so it works even when the drvs are unregistered
+/// (lazy-derivation-writes) — unlike `nix derivation show`, which needs valid store paths. Over-
+/// approximates (lists every output of every drv, not only realised ones), which is fine for GC
+/// rooting: a path not present in the store is simply not rooted.
+fn build_input_closure(top: &StorePath) -> std::collections::BTreeSet<String> {
+    let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut seen: HashSet<StorePath> = HashSet::new();
+    let mut frontier: VecDeque<StorePath> = VecDeque::from([top.clone()]);
+    while let Some(d) = frontier.pop_front() {
+        if !seen.insert(d.clone()) {
+            continue;
+        }
+        let drv = read_drv(&d);
+        for src in &drv.input_sources {
+            paths.insert(format!("/nix/store/{src}"));
+        }
+        for out in drv.outputs.values() {
+            if let Some(p) = &out.path {
+                paths.insert(format!("/nix/store/{p}"));
+            }
+        }
+        for idrv in drv.input_derivations.keys() {
+            frontier.push_back(idrv.clone());
+        }
+    }
+    paths
+}
+
 /// Walk the reference closure of the seeds, resolving each to a castore Node from PathInfo.
 /// Each PathInfo.get is a store round-trip and the closure is large (100s of paths), so we fetch
 /// a whole BFS level concurrently rather than serially -- serial grpc otherwise dominates the
@@ -495,11 +532,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("TOP_OUTPUT /nix/store/{p}");
         }
     };
+    let want_input_closure = args.print_input_closure;
+    let print_inputs = || {
+        if want_input_closure {
+            for p in build_input_closure(&drv_path) {
+                println!("INPUT_PATH {p}");
+            }
+        }
+    };
 
     let plan = plan_missing(&drv_path, &services.path_info_service).await?;
     if plan.is_empty() {
         eprintln!("nothing to build: all outputs of {} present in castore", drv_path);
         print_top();
+        print_inputs();
         return Ok(());
     }
     eprintln!("building {} missing drvs (leaves first):", plan.len());
@@ -545,6 +591,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         eprintln!("[{}/{}] {} done in {:.1}s", i + 1, total, d, t.elapsed().as_secs_f64());
     }
     print_top();
+    print_inputs();
 
     Ok(())
 }
