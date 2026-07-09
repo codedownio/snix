@@ -39,6 +39,12 @@ pub struct BuildState {
 
     // Paths known how to produce, by building or fetching.
     pub known_paths: RefCell<KnownPaths>,
+
+    // Memoize the resolved root PathInfo per store-path digest. Eval resolves the same store path
+    // (e.g. the nixpkgs source) thousands of times with different sub-paths, and each one re-runs a
+    // PathInfoService.get — a store round-trip (against nox-store, a gRPC call). A present PathInfo is
+    // immutable, so caching it is a pure win: it collapses those redundant lookups to one per path.
+    path_info_cache: RefCell<std::collections::HashMap<[u8; 20], PathInfo>>,
 }
 
 impl BuildState {
@@ -64,6 +70,7 @@ impl BuildState {
                 hashed_mirrors,
             ),
             known_paths: Default::default(),
+            path_info_cache: Default::default(),
         }
     }
 
@@ -94,15 +101,21 @@ impl BuildState {
         // produced that would build it, fall back to triggering the build.
         // To populate the input nodes, it might recursively trigger builds of
         // its dependencies too.
+        let digest = *store_path.digest();
+        // Fast path: a store path we've already resolved this run. Its PathInfo is immutable, so skip
+        // the PathInfoService round-trip (and any fetch/build) entirely and go straight to descend.
+        let mut path_info = if let Some(cached) = self.path_info_cache.borrow().get(&digest).cloned() {
+            cached
+        } else {
         let t_pi = std::time::Instant::now();
         let looked_up = self
             .path_info_service
             .as_ref()
-            .get(*store_path.digest())
+            .get(digest)
             .await
             .map_err(std::io::Error::other)?;
         snix_store::perf_stats::PATHINFO_GET.record(t_pi);
-        let mut path_info = if let Some(path_info) = looked_up {
+        let resolved = if let Some(path_info) = looked_up {
             path_info
         } else {
             // If there's no PathInfo found, this normally means we have to
@@ -296,6 +309,11 @@ impl BuildState {
 
                 out_path_info.ok_or(io::Error::other("build didn't produce store path"))?
             }
+        };
+            // Remember the resolved root PathInfo so later sub-path reads of this store path hit the
+            // cache above instead of re-querying the store.
+            self.path_info_cache.borrow_mut().insert(digest, resolved.clone());
+            resolved
         };
 
         // now with the root_node and sub_path, descend to the node requested.
