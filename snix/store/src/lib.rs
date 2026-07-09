@@ -8,6 +8,7 @@ pub mod nar;
 pub mod path_info;
 pub mod perf_stats;
 pub mod pathinfoservice;
+pub mod timing_blob;
 pub mod proto;
 pub mod utils;
 

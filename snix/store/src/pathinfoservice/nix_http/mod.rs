@@ -317,8 +317,10 @@ where
                 Some(comp_str) => Err(Error::UnsupportedNARCompression(comp_str.to_owned()))?,
             };
 
+            // Wrap the blob service so each blob's commit (close/PUT) is timed into
+            // perf_stats::WRITE{,_WALL} — the substitution-write (small-file ingest) cost.
             let (root_node, nar_hash, nar_size) = ingest_nar_and_hash(
-                self.blob_service.clone(),
+                crate::timing_blob::TimingBlobService(self.blob_service.clone()),
                 &self.directory_service,
                 &mut r,
                 &narinfo.ca,

@@ -213,6 +213,7 @@ impl EvalIO for SnixStoreIO {
                         }
                         Node::File { digest, .. } => {
                             let t_blob = std::time::Instant::now();
+                            let io_blob = snix_store::perf_stats::IO_WALL.enter();
                             let resp = self
                                 .build_state
                                 .blob_service
@@ -220,6 +221,7 @@ impl EvalIO for SnixStoreIO {
                                 .open_read(&digest)
                                 .await?;
                             snix_store::perf_stats::BLOB_READ.record(t_blob);
+                            drop(io_blob);
                             match resp {
                                 Some(blob_reader) => {
                                     // The VM Response needs a sync [std::io::Reader].
@@ -281,6 +283,7 @@ impl EvalIO for SnixStoreIO {
                         Node::Directory { digest, .. } => {
                             // fetch the Directory itself.
                             let t_dir = std::time::Instant::now();
+                            let io_dir = snix_store::perf_stats::IO_WALL.enter();
                             let directory = self
                                 .build_state
                                 .directory_service
@@ -301,6 +304,7 @@ impl EvalIO for SnixStoreIO {
                                     )
                                 })?;
                             snix_store::perf_stats::DIR_GET.record(t_dir);
+                            drop(io_dir);
 
                             // construct children from nodes
                             Ok(directory

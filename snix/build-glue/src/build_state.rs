@@ -95,6 +95,7 @@ impl BuildState {
         // To populate the input nodes, it might recursively trigger builds of
         // its dependencies too.
         let t_pi = std::time::Instant::now();
+        let io_pi = snix_store::perf_stats::IO_WALL.enter();
         let looked_up = self
             .path_info_service
             .as_ref()
@@ -102,6 +103,7 @@ impl BuildState {
             .await
             .map_err(std::io::Error::other)?;
         snix_store::perf_stats::PATHINFO_GET.record(t_pi);
+        drop(io_pi);
         let mut path_info = if let Some(path_info) = looked_up {
             path_info
         } else {
@@ -126,12 +128,14 @@ impl BuildState {
                 .get_fetch_for_output_path(store_path);
             if let Some((name, fetch)) = maybe_fetch {
                 let t_fetch = std::time::Instant::now();
+                let io_fetch = snix_store::perf_stats::IO_WALL.enter();
                 let (sp, path_info) = self
                     .fetcher
                     .ingest_and_persist(&name, fetch)
                     .await
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
                 snix_store::perf_stats::FETCH.record(t_fetch);
+                drop(io_fetch);
 
                 debug_assert_eq!(
                     sp.to_absolute_path(),
@@ -220,6 +224,7 @@ impl BuildState {
 
                 // create a build
                 let t_build = std::time::Instant::now();
+                let io_build = snix_store::perf_stats::IO_WALL.enter();
                 let build_result = self
                     .build_service
                     .as_ref()
@@ -227,6 +232,7 @@ impl BuildState {
                     .await
                     .map_err(std::io::Error::other)?;
                 snix_store::perf_stats::BUILD.record(t_build);
+                drop(io_build);
                 if nox_build_log {
                     eprintln!(
                         "NOX_BUILD_DONE /nix/store/{drv_path} {:.1}",
@@ -240,12 +246,14 @@ impl BuildState {
                 for (output, output_path) in build_result.outputs.into_iter().zip(output_paths) {
                     // calculate the nar representation
                     let t_nar = std::time::Instant::now();
+                    let io_nar = snix_store::perf_stats::IO_WALL.enter();
                     let (nar_size, nar_sha256) = self
                         .nar_calculation_service
                         .calculate_nar(&output.node)
                         .await
                         .map_err(std::io::Error::other)?;
                     snix_store::perf_stats::NAR_CALC.record(t_nar);
+                    drop(io_nar);
 
                     // assemble the PathInfo to persist
                     let path_info = PathInfo {
@@ -300,10 +308,12 @@ impl BuildState {
 
         // now with the root_node and sub_path, descend to the node requested.
         let t_descend = std::time::Instant::now();
+        let io_descend = snix_store::perf_stats::IO_WALL.enter();
         let node = descend_to(&self.directory_service, path_info.node.clone(), sub_path)
             .await
             .map_err(std::io::Error::other)?;
         snix_store::perf_stats::DESCEND.record(t_descend);
+        drop(io_descend);
         Ok(node.map(|node| {
             path_info.node = node;
             path_info
