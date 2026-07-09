@@ -1,6 +1,7 @@
 use std::{
     fmt::{self, Display},
     ops::Deref,
+    str::FromStr,
 };
 
 use data_encoding::BASE64;
@@ -98,6 +99,14 @@ where
             name: self.name.to_string(),
             bytes: self.bytes,
         }
+    }
+}
+
+impl FromStr for Signature<String> {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
     }
 }
 
