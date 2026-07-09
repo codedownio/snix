@@ -4992,9 +4992,9 @@ rec {
       };
       "serde_json" = rec {
         crateName = "serde_json";
-        version = "1.0.120";
+        version = "1.0.141";
         edition = "2021";
-        sha256 = "1idpv3zxcvl76z2z47jgg1f1wjqdnhfc204asmd27qfam34j23af";
+        sha256 = "1lq39h6lmkib00r4xipg26npl22pmkcy2r7cqqb84wdy3vrfzf9h";
         authors = [
           "Erick Tryzelaar <erick.tryzelaar@gmail.com>"
           "David Tolnay <dtolnay@gmail.com>"
@@ -5003,6 +5003,11 @@ rec {
           {
             name = "itoa";
             packageId = "itoa";
+          }
+          {
+            name = "memchr";
+            packageId = "memchr";
+            usesDefaultFeatures = false;
           }
           {
             name = "ryu";
@@ -5029,7 +5034,10 @@ rec {
             "indexmap"
             "std"
           ];
-          "std" = [ "serde/std" ];
+          "std" = [
+            "memchr/std"
+            "serde/std"
+          ];
         };
         resolvedDefaultFeatures = [
           "default"
