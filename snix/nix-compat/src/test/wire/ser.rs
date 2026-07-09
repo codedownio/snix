@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::wire::ProtocolVersion;
 
-use super::NixWrite;
+use crate::wire::ser::NixWrite;
 
 #[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub enum Error {
@@ -51,7 +51,7 @@ impl Error {
     }
 }
 
-impl super::Error for Error {
+impl crate::wire::ser::Error for Error {
     fn custom<T: fmt::Display>(msg: T) -> Self {
         Self::Custom(msg.to_string())
     }
@@ -491,11 +491,11 @@ mod test {
     use proptest::prelude::any;
     use proptest::proptest;
 
+    use crate::test::wire::ser::Operation;
+    use crate::test::wire::ser::OperationType;
+    use crate::test::wire::ser::proptest::arb_extra_write;
     use crate::wire::ser::Error as _;
     use crate::wire::ser::NixWrite;
-    use crate::wire::ser::mock::Operation;
-    use crate::wire::ser::mock::OperationType;
-    use crate::wire::ser::mock::proptest::arb_extra_write;
 
     use super::{Builder, Error};
 

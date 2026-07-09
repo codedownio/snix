@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::wire::ProtocolVersion;
 
-use super::NixRead;
+use crate::wire::de::NixRead;
 
 #[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub enum Error {
@@ -34,7 +34,7 @@ impl Error {
     }
 }
 
-impl super::Error for Error {
+impl crate::wire::de::Error for Error {
     fn custom<T: fmt::Display>(msg: T) -> Self {
         Self::Custom(msg.to_string())
     }

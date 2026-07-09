@@ -1,9 +1,7 @@
 use std::fmt;
 
-use nix_compat::wire::ser::{
-    NixWrite as _,
-    mock::{Builder, Error},
-};
+use nix_compat::test::wire::ser::{Builder, Error};
+use nix_compat::wire::ser::NixWrite as _;
 use nix_compat_derive::NixSerialize;
 
 #[derive(Debug, PartialEq, Eq, NixSerialize)]

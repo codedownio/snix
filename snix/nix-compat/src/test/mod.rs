@@ -1,5 +1,8 @@
 //! Test helpers
 
+#[cfg(feature = "wire")]
+pub mod wire;
+
 /// Test helper to create a [`BTreeMap`] with keys and values that support [`FromStr`]
 ///
 /// # Examples
