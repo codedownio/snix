@@ -1,5 +1,9 @@
+use std::collections::BTreeMap;
+use std::time::Duration;
+
 use crate::derived_path::DerivedPath;
 use crate::nixbase32;
+use crate::realisation::{DrvOutput, Realisation};
 use crate::wire::de::Error;
 use crate::{
     narinfo::Signature,
@@ -10,6 +14,7 @@ use crate::{
         ser::{NixSerialize, NixWrite},
     },
 };
+use bytes::Bytes;
 use nix_compat_derive::{NixDeserialize, NixSerialize};
 
 /// Marker type that consumes/sends and ignores a u64.
@@ -49,6 +54,100 @@ pub enum BuildMode {
     Normal = 0,
     Repair = 1,
     Check = 2,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    num_enum::TryFromPrimitive,
+    num_enum::IntoPrimitive,
+    NixDeserialize,
+    NixSerialize,
+)]
+#[nix(try_from = "u16", into = "u16")]
+#[repr(u16)]
+pub enum BuildStatus {
+    Built = 0,
+    Substituted = 1,
+    AlreadyValid = 2,
+    PermanentFailure = 3,
+    InputRejected = 4,
+    OutputRejected = 5,
+    TransientFailure = 6,
+    CachedFailure = 7,
+    TimedOut = 8,
+    MiscFailure = 9,
+    DependencyFailed = 10,
+    LogLimitExceeded = 11,
+    NotDeterministic = 12,
+    ResolvesToAlreadyValid = 13,
+    NoSubstituters = 14,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, NixDeserialize, NixSerialize)]
+#[repr(transparent)]
+pub struct Microseconds(i64);
+
+impl From<i64> for Microseconds {
+    fn from(value: i64) -> Self {
+        Microseconds(value)
+    }
+}
+
+impl From<Microseconds> for Duration {
+    fn from(value: Microseconds) -> Self {
+        Duration::from_micros(value.0.unsigned_abs())
+    }
+}
+
+impl TryFrom<Duration> for Microseconds {
+    type Error = std::num::TryFromIntError;
+    fn try_from(value: Duration) -> Result<Self, Self::Error> {
+        Ok(Microseconds(value.as_micros().try_into()?))
+    }
+}
+
+impl From<Microseconds> for i64 {
+    fn from(value: Microseconds) -> Self {
+        value.0
+    }
+}
+
+impl NixDeserialize for Option<Microseconds> {
+    async fn try_deserialize<R>(reader: &mut R) -> Result<Option<Self>, R::Error>
+    where
+        R: ?Sized + NixRead + Send,
+    {
+        if let Some(tag) = reader.try_read_value::<u8>().await? {
+            match tag {
+                0 => Ok(Some(None)),
+                1 => Ok(Some(Some(reader.read_value::<Microseconds>().await?))),
+                _ => Err(R::Error::invalid_data("invalid optional tag from remote")),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl NixSerialize for Option<Microseconds> {
+    async fn serialize<W>(&self, writer: &mut W) -> Result<(), W::Error>
+    where
+        W: NixWrite,
+    {
+        if let Some(value) = self.as_ref() {
+            writer.write_number(1).await?;
+            writer.write_value(value).await
+        } else {
+            writer.write_number(0).await
+        }
+    }
 }
 
 #[derive(Debug, NixSerialize)]
@@ -197,4 +296,31 @@ pub struct ValidPathInfo {
     // - path :: [StorePath][se-StorePath]
     pub path: StorePath,
     pub info: UnkeyedValidPathInfo,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NixDeserialize, NixSerialize)]
+pub struct BuildResult {
+    pub status: BuildStatus,
+    pub error_msg: Bytes,
+    #[nix(version = "29..")]
+    pub times_built: u32,
+    #[nix(version = "29..")]
+    pub is_non_deterministic: bool,
+    #[nix(version = "29..")]
+    pub start_time: u64,
+    #[nix(version = "29..")]
+    pub stop_time: u64,
+    #[nix(version = "37..")]
+    pub cpu_user: Option<Microseconds>,
+    #[nix(version = "37..")]
+    pub cpu_system: Option<Microseconds>,
+    #[nix(version = "28..")]
+    pub built_outputs: BTreeMap<DrvOutput, Realisation>,
+}
+
+pub type KeyedBuildResults = Vec<KeyedBuildResult>;
+#[derive(Debug, Clone, PartialEq, Eq, NixDeserialize, NixSerialize)]
+pub struct KeyedBuildResult {
+    pub path: DerivedPath,
+    pub result: BuildResult,
 }
