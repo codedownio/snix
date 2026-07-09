@@ -22,6 +22,8 @@ pub mod wire;
 pub mod derived_path;
 #[cfg(feature = "daemon")]
 pub mod nix_daemon;
+#[cfg(any(test, feature = "test"))]
+pub mod test;
 #[cfg(feature = "daemon")]
 pub use nix_daemon::worker_protocol;
 #[cfg(feature = "flakeref")]

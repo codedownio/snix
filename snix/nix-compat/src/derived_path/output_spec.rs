@@ -87,26 +87,14 @@ pub enum ParseOutputSpecError {
 mod tests {
     use rstest::rstest;
 
-    use crate::derived_path::OutputSpec;
-
-    #[macro_export]
-    macro_rules! set {
-        () => { BTreeSet::new() };
-        ($($x:expr),+ $(,)?) => {{
-            let mut ret = std::collections::BTreeSet::new();
-            $(
-                ret.insert($x.parse().unwrap());
-            )+
-            ret
-        }};
-    }
+    use crate::{btree_set, derived_path::OutputSpec};
 
     #[rstest]
     #[case("*", OutputSpec::All)]
-    #[case("out", OutputSpec::Named(set!("out")))]
-    #[case("bin,dev,out", OutputSpec::Named(set!("bin", "dev", "out")))]
-    #[case::unordered("dev,bin,out", OutputSpec::Named(set!("bin", "dev", "out")))]
-    #[case::duplicates("bin,dev,dev", OutputSpec::Named(set!("bin", "dev")))]
+    #[case("out", OutputSpec::Named(btree_set!("out")))]
+    #[case("bin,dev,out", OutputSpec::Named(btree_set!("bin", "dev", "out")))]
+    #[case::unordered("dev,bin,out", OutputSpec::Named(btree_set!("bin", "dev", "out")))]
+    #[case::duplicates("bin,dev,dev", OutputSpec::Named(btree_set!("bin", "dev")))]
     fn parse(#[case] value: &str, #[case] expected: OutputSpec) {
         let actual = value.parse::<OutputSpec>().unwrap();
         assert_eq!(actual, expected);
@@ -125,8 +113,8 @@ mod tests {
 
     #[rstest]
     #[case(OutputSpec::All, "*")]
-    #[case(OutputSpec::Named(set!("out")), "out")]
-    #[case(OutputSpec::Named(set!("bin", "dev", "out")), "bin,dev,out")]
+    #[case(OutputSpec::Named(btree_set!("out")), "out")]
+    #[case(OutputSpec::Named(btree_set!("bin", "dev", "out")), "bin,dev,out")]
     fn display(#[case] value: OutputSpec, #[case] expected: &str) {
         assert_eq!(value.to_string(), expected);
     }
