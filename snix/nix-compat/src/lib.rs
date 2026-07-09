@@ -22,6 +22,7 @@ pub mod wire;
 pub mod derived_path;
 #[cfg(feature = "daemon")]
 pub mod nix_daemon;
+pub mod realisation;
 #[cfg(any(test, feature = "test"))]
 pub mod test;
 #[cfg(feature = "daemon")]

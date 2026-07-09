@@ -13,9 +13,9 @@ help: the trait `FromStr` is not implemented for `Test`
             ByteString
             CString
             DerivedPath
+            DrvOutput
             HashAlgo
             IpAddr
             Ipv4Addr
             Ipv6Addr
-            LegacyDerivedPath
           and $N others

@@ -4742,6 +4742,40 @@ rec {
         ];
 
       };
+      "cfg_eval" = rec {
+        crateName = "cfg_eval";
+        version = "0.1.2";
+        edition = "2021";
+        sha256 = "13zqm1jc0ghc0bj1f33kcqxfa3l1dxvsqcjp9w0rd63b874mymj5";
+        procMacro = true;
+        authors = [
+          "Daniel Henry-Mantilla <daniel.henry.mantilla@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 2.0.117";
+            usesDefaultFeatures = false;
+            features = [
+              "parsing"
+              "printing"
+            ];
+          }
+        ];
+        features = {
+          "docs-rs" = [ "better-docs" ];
+          "ui-tests" = [ "better-docs" ];
+        };
+        resolvedDefaultFeatures = [ "default" ];
+      };
       "chacha20" = rec {
         crateName = "chacha20";
         version = "0.10.1";
@@ -13803,6 +13837,11 @@ rec {
             optional = true;
           }
           {
+            name = "cfg_eval";
+            packageId = "cfg_eval";
+            optional = true;
+          }
+          {
             name = "data-encoding";
             packageId = "data-encoding";
           }
@@ -13985,6 +14024,7 @@ rec {
             "tokio"
             "nix-compat-derive"
             "futures"
+            "serde"
           ];
           "default" = [
             "async"
@@ -14001,6 +14041,7 @@ rec {
             "dep:serde"
             "dep:serde_json"
             "dep:serde_with"
+            "dep:cfg_eval"
           ];
           "tokio" = [ "dep:tokio" ];
           "tokio-util" = [ "dep:tokio-util" ];

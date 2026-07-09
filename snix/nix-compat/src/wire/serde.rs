@@ -135,6 +135,102 @@ mod nixhash {
     }
 }
 
+mod realisation {
+    use nix_compat_derive::nix_serde_remote;
+
+    use crate::realisation::{DrvOutput, Realisation};
+    use crate::wire::de::NixDeserialize;
+    use crate::wire::ser::NixSerialize;
+
+    nix_serde_remote!(
+        #[nix(from_str, display)]
+        DrvOutput
+    );
+
+    impl NixSerialize for Realisation {
+        async fn serialize<W>(&self, writer: &mut W) -> Result<(), W::Error>
+        where
+            W: crate::wire::ser::NixWrite,
+        {
+            use crate::wire::ser::Error;
+            let s = serde_json::to_string(&self).map_err(W::Error::custom)?;
+            writer.write_slice(s.as_bytes()).await
+        }
+    }
+
+    impl NixDeserialize for Realisation {
+        async fn try_deserialize<R>(reader: &mut R) -> Result<Option<Self>, R::Error>
+        where
+            R: ?Sized + crate::wire::de::NixRead + Send,
+        {
+            use crate::wire::de::Error;
+            if let Some(buf) = reader.try_read_bytes().await? {
+                Ok(Some(
+                    serde_json::from_slice(&buf).map_err(R::Error::custom)?,
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use rstest::rstest;
+
+        use crate::{btree_map, hash_set, realisation::Realisation};
+
+        #[tokio::test]
+        #[rstest]
+        #[case(
+            Realisation {
+                id: "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad!out".parse().unwrap(),
+                out_path: "7h7qgvs4kgzsn8a6rb273saxyqh4jxlz-konsole-18.12.3".parse().unwrap(),
+                signatures: hash_set!["cache.nixos.org-1:0CpHca+06TwFp9VkMyz5OaphT3E8mnS+1SWymYlvFaghKSYPCMQ66TS1XPAr1+y9rfQZPLaHrBjjnIRktE/nAA=="],
+                dependent_realisations: btree_map![
+                    "sha256:ba7816bf8f01cfea414140de5dae2223b00361a496177a9cf410ff61f20015ad!dev" => "7h7qgvs4kgzsn8a6rb273saxyqh4jxlz-konsole-18.12.3-dev",
+                    "sha256:ba7816bf8f01cfea414140de5dae2223b00361a696177a9cf410ff61f20015ad!bin" => "7h7qgvs4kgzsn8a6rb273saxyqh4jxlz-konsole-18.12.3-bin",
+
+                ],
+            },
+            "{\"id\":\"sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad!out\",\"outPath\":\"7h7qgvs4kgzsn8a6rb273saxyqh4jxlz-konsole-18.12.3\",\"signatures\":[\"cache.nixos.org-1:0CpHca+06TwFp9VkMyz5OaphT3E8mnS+1SWymYlvFaghKSYPCMQ66TS1XPAr1+y9rfQZPLaHrBjjnIRktE/nAA==\"],\"dependentRealisations\":{\"sha256:ba7816bf8f01cfea414140de5dae2223b00361a496177a9cf410ff61f20015ad!dev\":\"7h7qgvs4kgzsn8a6rb273saxyqh4jxlz-konsole-18.12.3-dev\",\"sha256:ba7816bf8f01cfea414140de5dae2223b00361a696177a9cf410ff61f20015ad!bin\":\"7h7qgvs4kgzsn8a6rb273saxyqh4jxlz-konsole-18.12.3-bin\"}}",
+        )]
+        async fn nix_write_realisation(#[case] value: Realisation, #[case] expected: &str) {
+            use crate::wire::ser::NixWrite as _;
+
+            let mut mock = crate::test::wire::ser::Builder::new()
+                .write_slice(expected.as_bytes())
+                .build();
+            mock.write_value(&value).await.unwrap();
+        }
+
+        #[tokio::test]
+        #[rstest]
+        #[case(
+            Realisation {
+                id: "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad!out".parse().unwrap(),
+                out_path: "7h7qgvs4kgzsn8a6rb273saxyqh4jxlz-konsole-18.12.3".parse().unwrap(),
+                signatures: hash_set!["cache.nixos.org-1:0CpHca+06TwFp9VkMyz5OaphT3E8mnS+1SWymYlvFaghKSYPCMQ66TS1XPAr1+y9rfQZPLaHrBjjnIRktE/nAA=="],
+                dependent_realisations: btree_map![
+                    "sha256:ba7816bf8f01cfea414140de5dae2223b00361a496177a9cf410ff61f20015ad!dev" => "7h7qgvs4kgzsn8a6rb273saxyqh4jxlz-konsole-18.12.3-dev",
+                    "sha256:ba7816bf8f01cfea414140de5dae2223b00361a696177a9cf410ff61f20015ad!bin" => "7h7qgvs4kgzsn8a6rb273saxyqh4jxlz-konsole-18.12.3-bin",
+
+                ],
+            },
+            "{\"id\":\"sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad!out\",\"outPath\":\"7h7qgvs4kgzsn8a6rb273saxyqh4jxlz-konsole-18.12.3\",\"signatures\":[\"cache.nixos.org-1:0CpHca+06TwFp9VkMyz5OaphT3E8mnS+1SWymYlvFaghKSYPCMQ66TS1XPAr1+y9rfQZPLaHrBjjnIRktE/nAA==\"],\"dependentRealisations\":{\"sha256:ba7816bf8f01cfea414140de5dae2223b00361a496177a9cf410ff61f20015ad!dev\":\"7h7qgvs4kgzsn8a6rb273saxyqh4jxlz-konsole-18.12.3-dev\",\"sha256:ba7816bf8f01cfea414140de5dae2223b00361a696177a9cf410ff61f20015ad!bin\":\"7h7qgvs4kgzsn8a6rb273saxyqh4jxlz-konsole-18.12.3-bin\"}}",
+        )]
+        async fn nix_read_realisation(#[case] expected: Realisation, #[case] value: &str) {
+            use crate::wire::de::NixRead as _;
+
+            let mut mock = crate::test::wire::de::Builder::new()
+                .read_slice(value.as_bytes())
+                .build();
+            let actual: Realisation = mock.read_value().await.unwrap();
+            pretty_assertions::assert_eq!(actual, expected);
+        }
+    }
+}
+
 mod store_path {
     use crate::store_path::StorePath;
     use crate::wire::de::{NixDeserialize, NixRead};

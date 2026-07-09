@@ -3521,6 +3521,7 @@ rec {
             "tokio"
             "nix-compat-derive"
             "futures"
+            "serde"
           ];
           "default" = [
             "async"
@@ -3537,6 +3538,7 @@ rec {
             "dep:serde"
             "dep:serde_json"
             "dep:serde_with"
+            "dep:cfg_eval"
           ];
           "tokio" = [ "dep:tokio" ];
           "tokio-util" = [ "dep:tokio-util" ];
