@@ -1,19 +1,28 @@
-use std::sync::LazyLock;
-
-use aho_corasick::AhoCorasick;
-
-const PATTERNS: [&str; 5] = ["\\", "\n", "\r", "\t", "\""];
-const REPLACEMENTS: [&str; 5] = ["\\\\", "\\n", "\\r", "\\t", "\\\""];
-static AC: LazyLock<AhoCorasick> = LazyLock::new(|| {
-    AhoCorasick::builder()
-        .build(PATTERNS)
-        .expect("to init aho-corasick with PATTERNS")
-});
-
 /// Given a byte sequence, writes it in escaped form to the passed writer.
 /// Does not add surrounding quotes.
+///
+/// Only five single-byte characters need escaping, so this is a plain scan
+/// that writes unescaped runs in bulk. (A previous version used aho-corasick's
+/// *stream* API, which zero-initializes a fresh 64 KiB buffer per call — at
+/// hundreds of thousands of calls per eval, that buffer churn dominated
+/// whole-evaluation profiles: ~49% of instructions on a nixpkgs env eval.)
 pub fn write_escaped<P: AsRef<[u8]>>(s: P, w: &mut impl std::io::Write) -> std::io::Result<()> {
-    AC.try_stream_replace_all(s.as_ref(), w, &REPLACEMENTS)
+    let s = s.as_ref();
+    let mut start = 0;
+    for (i, b) in s.iter().enumerate() {
+        let esc: &[u8] = match b {
+            b'\\' => b"\\\\",
+            b'\n' => b"\\n",
+            b'\r' => b"\\r",
+            b'\t' => b"\\t",
+            b'"' => b"\\\"",
+            _ => continue,
+        };
+        w.write_all(&s[start..i])?;
+        w.write_all(esc)?;
+        start = i + 1;
+    }
+    w.write_all(&s[start..])
 }
 
 #[cfg(test)]
