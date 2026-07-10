@@ -1269,6 +1269,61 @@ where
                     None,
                 )?;
             }
+
+            // A synchronous builtin: force its (all-strict) arguments inline
+            // where possible and call the function directly, with no
+            // generator involved at all. Arguments are processed in the same
+            // reverse-declaration order as the builtin macro, so catchable
+            // propagation is identical; the first genuinely unforced thunk
+            // falls back to a forcing wrapper generator.
+            BuiltinResult::CalledSync(name, func, mut values) => {
+                let mut catchable = None;
+                let mut needs_forcing = false;
+
+                for value in values.iter_mut().rev() {
+                    match value {
+                        Value::Thunk(t) if t.is_forced() => {
+                            let forced = t.value().clone();
+                            if forced.is_catchable() {
+                                catchable = Some(forced);
+                                break;
+                            }
+                            *value = forced;
+                        }
+                        Value::Thunk(_) => {
+                            needs_forcing = true;
+                            break;
+                        }
+                        v if v.is_catchable() => {
+                            catchable = Some(v.clone());
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+
+                if let Some(catchable) = catchable {
+                    self.stack.push(catchable);
+                } else if needs_forcing {
+                    let generator = generators::Gen::new(|co| {
+                        generators::pin_generator(generators::force_sync_builtin_args_then_call(
+                            co, func, values,
+                        ))
+                    });
+                    let frame_id = self.frames.len();
+                    self.run_generator(
+                        name,
+                        span,
+                        frame_id,
+                        GeneratorState::Running,
+                        generator,
+                        None,
+                    )?;
+                } else {
+                    let value = func(values).with_span(span, self)?;
+                    self.stack.push(value);
+                }
+            }
         }
 
         Ok(())
