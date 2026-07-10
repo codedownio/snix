@@ -17,6 +17,7 @@ use codemap::Span;
 use rustc_hash::FxHashMap;
 use serde_json::json;
 use std::{
+    future::Future,
     cmp::Ordering,
     ffi::OsStr,
     path::{Path, PathBuf},
@@ -43,7 +44,7 @@ use crate::{
     warnings::{EvalWarning, WarningKind},
 };
 
-use generators::{Generator, GeneratorState, call_functor};
+use generators::{Gen, Generator, GeneratorState, call_functor, pin_generator};
 
 use self::generators::{VMRequest, VMResponse};
 
@@ -434,6 +435,48 @@ where
         })
     }
 
+    /// Push the given bytecode frame, then construct and run a generator
+    /// inline on top of it until it completes or suspends.
+    ///
+    /// On completion the generator's result is on the stack and the bytecode
+    /// frame is popped back off and returned, so the caller can continue
+    /// executing it without an outer-loop round trip. On suspension the frame
+    /// stack is already set up correctly for the outer loop (the generator
+    /// re-enqueued itself above our frame) and `None` is returned; the caller
+    /// must exit its bytecode loop with `Ok(false)`.
+    fn run_generator_over_frame<F, G>(
+        &mut self,
+        frame_span: Span,
+        frame: BytecodeFrame,
+        name: &'static str,
+        gen_span: Span,
+        genfn: G,
+    ) -> EvalResult<Option<BytecodeFrame>>
+    where
+        F: Future<Output = Result<Value, ErrorKind>> + 'static,
+        G: FnOnce(GenCo) -> F,
+    {
+        self.push_bytecode_frame(frame_span, frame);
+        let frame_id = self.frames.len();
+        let generator = Gen::new(|co| pin_generator(genfn(co)));
+
+        if self.run_generator(
+            name,
+            gen_span,
+            frame_id,
+            GeneratorState::Running,
+            generator,
+            None,
+        )? {
+            match self.frames.pop() {
+                Some(Frame::BytecodeFrame { bytecode_frame, .. }) => Ok(Some(bytecode_frame)),
+                _ => unreachable!("Snix bug: bytecode frame lost under inline generator"),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Run the VM's primary (outer) execution loop, continuing execution based
     /// on the current frame at the top of the frame stack.
     fn execute(mut self) -> EvalResult<RuntimeResult> {
@@ -812,12 +855,33 @@ where
 
                 Op::Equal => lifted_pop! {
                     self(b, a) => {
-                        let gen_span = frame.current_span();
-                        self.push_bytecode_frame(span, frame);
-                        self.enqueue_generator("nix_eq", gen_span, |co| {
-                            a.nix_eq_owned_genco(b, co, PointerEquality::ForbidAll, gen_span)
-                        });
-                        return Ok(false);
+                        // Fast path: scalar comparisons need no generator.
+                        // These arms mirror the "trivial comparisons" in
+                        // Value::nix_eq exactly; everything else (thunks,
+                        // lists, attrs, closures, ...) takes the generator.
+                        let fast = match (&a, &b) {
+                            (Value::Null, Value::Null) => Some(true),
+                            (Value::Bool(b1), Value::Bool(b2)) => Some(b1 == b2),
+                            (Value::String(s1), Value::String(s2)) => Some(s1 == s2),
+                            (Value::Path(p1), Value::Path(p2)) => Some(p1 == p2),
+                            (Value::Integer(i1), Value::Integer(i2)) => Some(i1 == i2),
+                            (Value::Integer(i), Value::Float(f)) => Some(*i as f64 == *f),
+                            (Value::Float(f1), Value::Float(f2)) => Some(f1 == f2),
+                            (Value::Float(f), Value::Integer(i)) => Some(*f == *i as f64),
+                            _ => None,
+                        };
+
+                        if let Some(eq) = fast {
+                            self.stack.push(Value::Bool(eq));
+                        } else {
+                            let gen_span = frame.current_span();
+                            match self.run_generator_over_frame(span, frame, "nix_eq", gen_span, |co| {
+                                a.nix_eq_owned_genco(b, co, PointerEquality::ForbidAll, gen_span)
+                            })? {
+                                Some(reclaimed) => frame = reclaimed,
+                                None => return Ok(false),
+                            }
+                        }
                     }
                 },
 
@@ -913,23 +977,21 @@ where
                 Op::ResolveWith => {
                     let ident = self.stack_pop().to_str().with_span(&frame, self)?;
 
-                    // Re-enqueue this frame.
                     let op_span = frame.current_span();
-                    self.push_bytecode_frame(span, frame);
 
                     // Construct a generator frame doing the lookup in constant
-                    // stack space.
+                    // stack space. (The closed with-stack length previously came
+                    // from last_bytecode_frame() after re-enqueueing this frame,
+                    // which is the same as reading this frame's own upvalues.)
                     let with_stack_len = self.with_stack.len();
-                    let closed_with_stack_len = self
-                        .last_bytecode_frame()
-                        .map(|frame| frame.upvalues.with_stack_len())
-                        .unwrap_or(0);
+                    let closed_with_stack_len = frame.upvalues.with_stack_len();
 
-                    self.enqueue_generator("resolve_with", op_span, |co| {
+                    match self.run_generator_over_frame(span, frame, "resolve_with", op_span, |co| {
                         resolve_with(co, ident.into(), with_stack_len, closed_with_stack_len)
-                    });
-
-                    return Ok(false);
+                    })? {
+                        Some(reclaimed) => frame = reclaimed,
+                        None => return Ok(false),
+                    }
                 }
 
                 Op::Finalise => {
@@ -947,13 +1009,13 @@ where
 
                     let value = self.stack_pop();
                     let gen_span = frame.current_span();
-                    self.push_bytecode_frame(span, frame);
 
-                    self.enqueue_generator("coerce_to_string", gen_span, |co| {
+                    match self.run_generator_over_frame(span, frame, "coerce_to_string", gen_span, |co| {
                         value.coerce_to_string(co, kind, gen_span)
-                    });
-
-                    return Ok(false);
+                    })? {
+                        Some(reclaimed) => frame = reclaimed,
+                        None => return Ok(false),
+                    }
                 }
 
                 Op::Interpolate => self.run_interpolate(frame.read_uvarint(), &frame)?,
@@ -984,14 +1046,31 @@ where
 
                 Op::Add => lifted_pop! {
                     self(b, a) => {
-                        let gen_span = frame.current_span();
-                        self.push_bytecode_frame(span, frame);
+                        // Fast paths mirroring the pure arms of add_values:
+                        // numbers and string/string concatenation need no
+                        // generator. Paths and coercing additions do.
+                        match (&a, &b) {
+                            (Value::Integer(_) | Value::Float(_), Value::Integer(_) | Value::Float(_)) => {
+                                let result = arithmetic_op!(&a, &b, +).with_span(&frame, self)?;
+                                self.stack.push(result);
+                            }
+                            (Value::String(s1), Value::String(s2)) => {
+                                self.stack.push(Value::String(s1.concat(s2)));
+                            }
+                            _ => {
+                                let gen_span = frame.current_span();
 
-                        // OpAdd can add not just numbers, but also string-like
-                        // things, which requires more VM logic. This operation is
-                        // evaluated in a generator frame.
-                        self.enqueue_generator("add_values", gen_span, |co| add_values(co, a, b));
-                        return Ok(false);
+                                // OpAdd can add not just numbers, but also string-like
+                                // things, which requires more VM logic. This operation is
+                                // evaluated in a generator frame.
+                                match self.run_generator_over_frame(span, frame, "add_values", gen_span, |co| {
+                                    add_values(co, a, b)
+                                })? {
+                                    Some(reclaimed) => frame = reclaimed,
+                                    None => return Ok(false),
+                                }
+                            }
+                        }
                     }
                 },
 

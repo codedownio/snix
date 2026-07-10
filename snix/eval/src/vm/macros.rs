@@ -38,21 +38,37 @@ macro_rules! cmp_op {
     ( $vm:ident, $frame:ident, $span:ident, $op:tt ) => {{
         lifted_pop! {
             $vm(b, a) => {
-                async fn compare(a: Value, b: Value, co: GenCo) -> Result<Value, ErrorKind> {
-                    let a = generators::request_force(&co, a).await;
-                    let b = generators::request_force(&co, b).await;
-                    let span = generators::request_span(&co).await;
-                    let ordering = a.nix_cmp_ordering(b, co, span).await?;
-                    match ordering {
-                        Err(cek) => Ok(Value::from(cek)),
-                        Ok(ordering) => Ok(Value::Bool(cmp_op!(@order $op ordering))),
+                // Fast path: non-thunk scalar comparisons, mirroring the
+                // corresponding arms of Value::nix_cmp_ordering exactly.
+                let fast = match (&a, &b) {
+                    (Value::Integer(i1), Value::Integer(i2)) => Some(i1.cmp(i2)),
+                    (Value::Float(f1), Value::Float(f2)) => Some(f1.total_cmp(f2)),
+                    (Value::Integer(i1), Value::Float(f2)) => Some((*i1 as f64).total_cmp(f2)),
+                    (Value::Float(f1), Value::Integer(i2)) => Some(f1.total_cmp(&(*i2 as f64))),
+                    (Value::String(s1), Value::String(s2)) => Some(s1.cmp(s2)),
+                    _ => None,
+                };
+
+                if let Some(ordering) = fast {
+                    $vm.stack.push(Value::Bool(cmp_op!(@order $op ordering)));
+                } else {
+                    async fn compare(a: Value, b: Value, co: GenCo) -> Result<Value, ErrorKind> {
+                        let a = generators::request_force(&co, a).await;
+                        let b = generators::request_force(&co, b).await;
+                        let span = generators::request_span(&co).await;
+                        let ordering = a.nix_cmp_ordering(b, co, span).await?;
+                        match ordering {
+                            Err(cek) => Ok(Value::from(cek)),
+                            Ok(ordering) => Ok(Value::Bool(cmp_op!(@order $op ordering))),
+                        }
+                    }
+
+                    let gen_span = $frame.current_span();
+                    match $vm.run_generator_over_frame($span, $frame, "compare", gen_span, |co| compare(a, b, co))? {
+                        Some(reclaimed) => $frame = reclaimed,
+                        None => return Ok(false),
                     }
                 }
-
-                let gen_span = $frame.current_span();
-                $vm.push_bytecode_frame($span, $frame);
-                $vm.enqueue_generator("compare", gen_span, |co| compare(a, b, co));
-                return Ok(false);
             }
         }
     }};
