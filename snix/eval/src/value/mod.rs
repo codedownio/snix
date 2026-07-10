@@ -28,7 +28,7 @@ use crate::errors::{CatchableErrorKind, ErrorKind};
 use crate::opcode::StackIdx;
 use crate::vm::generators::{self, GenCo};
 pub use attrs::NixAttrs;
-pub use builtin::{Builtin, BuiltinResult};
+pub use builtin::{Builtin, BuiltinResult, BuiltinSyncFn};
 pub(crate) use function::Formals;
 pub use function::{Closure, Lambda};
 pub use list::NixList;

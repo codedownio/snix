@@ -16,7 +16,7 @@ use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::value::PointerEquality;
+use crate::value::{Builtin, PointerEquality};
 use crate::vm::generators::{self, GenCo};
 use crate::warnings::WarningKind;
 use crate::{
@@ -1574,10 +1574,138 @@ async fn bgc_insert_key(
     Ok(Ok(true))
 }
 
+/// Synchronous re-implementations of hot, pure builtins (see
+/// [`crate::value::BuiltinSyncFn`]): every argument is strict (the VM forces
+/// them before the call, propagating catchables), and the bodies need no VM
+/// services. These override the generator-based versions defined in the
+/// macro block above and must remain semantically identical to them.
+///
+/// Arguments arrive as a `Vec` in declaration order and are popped from the
+/// back, i.e. in reverse declaration order — same as the builtin macro.
+fn sync_builtins() -> Vec<Builtin> {
+    fn arg(values: &mut Vec<Value>) -> Value {
+        values
+            .pop()
+            .expect("Snix bug: sync builtin called with incorrect number of arguments")
+    }
+
+    vec![
+        Builtin::new_sync("attrNames", None, 1, |mut v| {
+            let xs = arg(&mut v).to_attrs()?;
+            let mut output = Vec::with_capacity(xs.len());
+            for (key, _val) in xs.iter_sorted() {
+                output.push(Value::from(key.clone()));
+            }
+            Ok(Value::List(NixList::construct(output.len(), output)))
+        }),
+        Builtin::new_sync("attrValues", None, 1, |mut v| {
+            let xs = arg(&mut v).to_attrs()?;
+            let mut output = Vec::with_capacity(xs.len());
+            for (_key, val) in xs.iter_sorted() {
+                output.push(val.clone());
+            }
+            Ok(Value::List(NixList::construct(output.len(), output)))
+        }),
+        Builtin::new_sync("elemAt", None, 2, |mut v| {
+            // pop order is reverse declaration order; conversion order
+            // matches the original body (xs first, then i).
+            let i_val = arg(&mut v);
+            let xs = arg(&mut v).to_list()?;
+            let i = i_val.as_int()?;
+            if i < 0 {
+                Err(ErrorKind::IndexOutOfBounds { index: i })
+            } else {
+                match xs.get(i as usize) {
+                    Some(x) => Ok(x.clone()),
+                    None => Err(ErrorKind::IndexOutOfBounds { index: i }),
+                }
+            }
+        }),
+        Builtin::new_sync("getAttr", None, 2, |mut v| {
+            let set = arg(&mut v);
+            let k = arg(&mut v).to_str()?;
+            let xs = set.to_attrs()?;
+            match xs.select(&k) {
+                Some(x) => Ok(x.clone()),
+                None => Err(ErrorKind::AttributeNotFound {
+                    name: k.to_string(),
+                }),
+            }
+        }),
+        Builtin::new_sync("hasAttr", None, 2, |mut v| {
+            let set = arg(&mut v);
+            let k = arg(&mut v).to_str()?;
+            let xs = set.to_attrs()?;
+            Ok(Value::Bool(xs.contains(&k)))
+        }),
+        Builtin::new_sync("head", None, 1, |mut v| {
+            match arg(&mut v).to_list()?.get(0) {
+                Some(x) => Ok(x.clone()),
+                None => Err(ErrorKind::IndexOutOfBounds { index: 0 }),
+            }
+        }),
+        Builtin::new_sync("length", None, 1, |mut v| {
+            Ok(Value::Integer(arg(&mut v).to_list()?.len() as i64))
+        }),
+        Builtin::new_sync("tail", None, 1, |mut v| {
+            let xs = arg(&mut v).to_list()?;
+            if xs.is_empty() {
+                Err(ErrorKind::TailEmptyList)
+            } else {
+                let output = xs.into_iter().skip(1).collect::<Vec<_>>();
+                Ok(Value::List(NixList::construct(output.len(), output)))
+            }
+        }),
+        Builtin::new_sync("typeOf", None, 1, |mut v| {
+            Ok(Value::from(arg(&mut v).type_of()))
+        }),
+        Builtin::new_sync("isAttrs", None, 1, |mut v| {
+            Ok(Value::Bool(matches!(arg(&mut v), Value::Attrs(_))))
+        }),
+        Builtin::new_sync("isBool", None, 1, |mut v| {
+            Ok(Value::Bool(matches!(arg(&mut v), Value::Bool(_))))
+        }),
+        Builtin::new_sync("isFloat", None, 1, |mut v| {
+            Ok(Value::Bool(matches!(arg(&mut v), Value::Float(_))))
+        }),
+        Builtin::new_sync("isFunction", None, 1, |mut v| {
+            Ok(Value::Bool(matches!(
+                arg(&mut v),
+                Value::Closure(_) | Value::Builtin(_)
+            )))
+        }),
+        Builtin::new_sync("isInt", None, 1, |mut v| {
+            Ok(Value::Bool(matches!(arg(&mut v), Value::Integer(_))))
+        }),
+        Builtin::new_sync("isList", None, 1, |mut v| {
+            Ok(Value::Bool(matches!(arg(&mut v), Value::List(_))))
+        }),
+        Builtin::new_sync("isNull", None, 1, |mut v| {
+            Ok(Value::Bool(matches!(arg(&mut v), Value::Null)))
+        }),
+        Builtin::new_sync("isPath", None, 1, |mut v| {
+            Ok(Value::Bool(matches!(arg(&mut v), Value::Path(_))))
+        }),
+        Builtin::new_sync("isString", None, 1, |mut v| {
+            Ok(Value::Bool(matches!(arg(&mut v), Value::String(_))))
+        }),
+    ]
+}
+
 /// The set of standard pure builtins in Nix, mostly concerned with
 /// data structure manipulation (string, attrs, list, etc. functions).
 pub fn pure_builtins() -> Vec<(&'static str, Value)> {
     let mut result = pure_builtins::builtins(Rc::new(BuiltinState::default()));
+
+    // Swap in the synchronous versions of hot builtins (they keep the
+    // generator-based implementations' semantics, without a generator).
+    for builtin in sync_builtins() {
+        let slot = result
+            .iter_mut()
+            .find(|(name, _)| *name == builtin.name())
+            .expect("Snix bug: sync builtin overrides an unknown builtin");
+        slot.1 = Value::Builtin(builtin);
+    }
 
     // Pure-value builtins
     result.push(("nixVersion", Value::from("2.18.3-compat-snix-0.1")));

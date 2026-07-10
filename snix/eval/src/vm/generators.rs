@@ -609,6 +609,26 @@ pub async fn request_stack_pop(co: &GenCo) -> Value {
 }
 
 /// Force any value and return the evaluated result from the VM.
+/// Fallback for sync builtins whose arguments could not all be forced inline
+/// by the VM: force them through the generator machinery, in the same
+/// reverse-declaration order the builtin macro uses (so error and catchable
+/// propagation order is identical), then invoke the sync function.
+pub(crate) async fn force_sync_builtin_args_then_call(
+    co: GenCo,
+    func: crate::value::BuiltinSyncFn,
+    mut values: Vec<Value>,
+) -> Result<Value, ErrorKind> {
+    for i in (0..values.len()).rev() {
+        let forced = request_force(&co, std::mem::replace(&mut values[i], Value::Null)).await;
+        if forced.is_catchable() {
+            return Ok(forced);
+        }
+        values[i] = forced;
+    }
+
+    func(values)
+}
+
 pub async fn request_force(co: &GenCo, val: Value) -> Value {
     if let Value::Thunk(_) = val {
         match co.yield_(VMRequest::ForceValue(val)).await {
