@@ -130,23 +130,45 @@ impl Chunk {
         }
     }
 
+    /// Find the index of the span covering the given code offset.
+    fn span_index(&self, offset: usize) -> usize {
+        match self.spans.binary_search_by(|span| span.start.cmp(&offset)) {
+            Ok(index) => index,
+            Err(0) => 0,
+            Err(index) => index - 1,
+        }
+    }
+
+    /// Like [`Chunk::get_span`], but with a caller-provided cursor.
+    ///
+    /// A bytecode frame queries spans at (almost always) monotonically
+    /// increasing offsets; remembering the last matching span index makes
+    /// the common lookup O(1) amortized instead of a binary search per
+    /// query. Any cursor value is safe — it is only a starting hint.
+    pub fn get_span_hinted(&self, offset: CodeIdx, hint: &std::cell::Cell<usize>) -> codemap::Span {
+        let spans = &self.spans;
+        let mut i = hint.get().min(spans.len() - 1);
+
+        if spans[i].start <= offset.0 {
+            // Advance while the next span still begins at or before the
+            // offset (amortized O(1) for monotonically increasing offsets).
+            while i + 1 < spans.len() && spans[i + 1].start <= offset.0 {
+                i += 1;
+            }
+        } else {
+            // Offset lies before the hinted span (frame reclaim, error
+            // paths): fall back to the binary search.
+            i = self.span_index(offset.0);
+        }
+
+        hint.set(i);
+        spans[i].span
+    }
+
     /// Retrieve the [codemap::Span] from which the instruction at
     /// `offset` was compiled.
     pub fn get_span(&self, offset: CodeIdx) -> codemap::Span {
-        let position = self
-            .spans
-            .binary_search_by(|span| span.start.cmp(&offset.0));
-
-        let span = match position {
-            Ok(index) => &self.spans[index],
-            Err(index) => {
-                if index == 0 {
-                    &self.spans[0]
-                } else {
-                    &self.spans[index - 1]
-                }
-            }
-        };
+        let span = &self.spans[self.span_index(offset.0)];
 
         span.span
     }
