@@ -11008,11 +11008,6 @@ rec {
             packageId = "md-5 0.10.6";
           }
           {
-            name = "nix-compat-derive";
-            packageId = "nix-compat-derive";
-            optional = true;
-          }
-          {
             name = "nom";
             packageId = "nom";
           }
@@ -11113,10 +11108,8 @@ rec {
           ];
           "default" = [
             "async"
-            "daemon"
             "hashbrown"
             "wire"
-            "nix-compat-derive"
           ];
           "digest" = [ "dep:digest" ];
           "flakeref" = [ "url" ];
@@ -11141,13 +11134,11 @@ rec {
         resolvedDefaultFeatures = [
           "async"
           "bytes"
-          "daemon"
           "default"
           "digest"
           "flakeref"
           "futures"
           "hashbrown"
-          "nix-compat-derive"
           "pin-project-lite"
           "serde"
           "tokio"
@@ -11155,38 +11146,6 @@ rec {
           "url"
           "wire"
         ];
-      };
-      "nix-compat-derive" = rec {
-        crateName = "nix-compat-derive";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith {
-          filter = sourceFilter;
-          src = ../../../snix/nix-compat-derive;
-        };
-        procMacro = true;
-        libName = "nix_compat_derive";
-        dependencies = [
-          {
-            name = "proc-macro2";
-            packageId = "proc-macro2";
-            features = [ "proc-macro" ];
-          }
-          {
-            name = "quote";
-            packageId = "quote";
-            features = [ "proc-macro" ];
-          }
-          {
-            name = "syn";
-            packageId = "syn 2.0.117";
-            features = [
-              "full"
-              "extra-traits"
-            ];
-          }
-        ];
-
       };
       "nix-language-test-suite-common" = rec {
         crateName = "nix-language-test-suite-common";

@@ -13988,10 +13988,8 @@ rec {
           ];
           "default" = [
             "async"
-            "daemon"
             "hashbrown"
             "wire"
-            "nix-compat-derive"
           ];
           "digest" = [ "dep:digest" ];
           "flakeref" = [ "url" ];
@@ -14127,6 +14125,7 @@ rec {
           {
             name = "nix-compat";
             packageId = "nix-compat";
+            features = [ "daemon" ];
           }
           {
             name = "snix-castore";

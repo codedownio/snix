@@ -3742,10 +3742,8 @@ rec {
           ];
           "default" = [
             "async"
-            "daemon"
             "hashbrown"
             "wire"
-            "nix-compat-derive"
           ];
           "digest" = [ "dep:digest" ];
           "flakeref" = [ "url" ];

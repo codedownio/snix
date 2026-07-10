@@ -1420,7 +1420,6 @@ dependencies = [
  "futures",
  "hashbrown 0.17.1",
  "md-5 0.10.6",
- "nix-compat-derive",
  "nom",
  "num_enum",
  "pin-project-lite",
@@ -1431,15 +1430,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "nix-compat-derive"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.87",
 ]
 
 [[package]]

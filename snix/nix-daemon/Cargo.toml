@@ -5,7 +5,7 @@ edition = "2024"
 rust-version.workspace = true
 
 [dependencies]
-nix-compat.path = "../nix-compat"
+nix-compat = { path = "../nix-compat", features = ["daemon"] }
 snix-castore.path = "../castore"
 snix-store.path = "../store"
 tokio = { workspace = true }

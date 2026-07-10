@@ -5,12 +5,12 @@ edition = "2024"
 rust-version.workspace = true
 
 [features]
-# async NAR writers and hashing tooling.
-# The NAR writer also needs the `wire` feature.
+# async NAR readers, writers and hashing tooling.
+# The NAR reader also needs the `wire` feature.
 async = ["digest", "futures", "tokio", "tokio-util"]
 # hashbrown::Equivalent impls
 hashbrown = ["dep:hashbrown"]
-# code emitting low-level packets used in the daemon protocol.
+# code emitting low-level packets used in the daemon protocol and NAR reader.
 wire = ["tokio", "pin-project-lite", "bytes"]
 flakeref = ["url"]
 # nix-daemon protocol handling
@@ -19,8 +19,7 @@ daemon = ["tokio", "nix-compat-derive", "futures"]
 serde = ["dep:serde", "dep:serde_json", "dep:serde_with"]
 test = []
 
-# Enable all features by default.
-default = ["async", "daemon", "hashbrown", "wire", "nix-compat-derive"]
+default = ["async", "hashbrown", "wire"]
 
 [dependencies]
 aho-corasick.workspace = true

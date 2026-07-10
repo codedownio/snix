@@ -11,14 +11,13 @@ help: the trait `NixDeserialize` is not implemented for `BadType`
   | ^^^^^^^^^^^^^^^^^^
   = help: the following other types implement trait `NixDeserialize`:
             BTreeMap<K, V>
-            BuildMode
-            CAHash
-            ClientSettings
-            DerivedPath
-            HashAlgo
-            IgnoredZero
-            LegacyDerivedPath
-          and $N others
+            Test
+            Vec<T>
+            bool
+            bytes::bytes::Bytes
+            std::string::String
+            u64
+            usize
 note: required by a bound in `try_read_value`
  --> $WORKSPACE/nix-compat/src/wire/de/mod.rs
   |
