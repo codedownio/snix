@@ -3,8 +3,14 @@ use crate::value::Value;
 use crate::{CoercionKind, SourceCode};
 use std::io::Write;
 
-/// Maximum size of a u64 encoded in the vu128 varint encoding.
-const U64_VARINT_SIZE: usize = 9;
+/// Size of a fixed-width bytecode operand, in bytes.
+///
+/// Operands used to be vu128 varints (1-9 bytes); profiling nixpkgs
+/// evaluation showed the branchy decode in the interpreter loop costing more
+/// than the code-size savings. A fixed 4-byte little-endian operand decodes
+/// as a single unaligned load. Operand values are indexes and counts, which
+/// all comfortably fit u32 (checked on write).
+const OPERAND_SIZE: usize = 4;
 
 /// Represents a source location from which one or more operations
 /// were compiled.
@@ -49,28 +55,19 @@ impl Chunk {
     }
 
     pub fn push_uvarint(&mut self, data: u64) {
-        let mut encoded = [0u8; U64_VARINT_SIZE];
-        let bytes_written = vu128::encode_u64(&mut encoded, data);
-        self.code.extend_from_slice(&encoded[..bytes_written]);
+        assert!(
+            data <= u32::MAX as u64,
+            "Snix bug: bytecode operand overflows u32"
+        );
+        self.code.extend_from_slice(&(data as u32).to_le_bytes());
     }
 
     pub fn read_uvarint(&self, idx: usize) -> (u64, usize) {
-        debug_assert!(
-            idx < self.code.len(),
-            "invalid bytecode (missing varint operand)",
-        );
+        let bytes: [u8; OPERAND_SIZE] = self.code[idx..idx + OPERAND_SIZE]
+            .try_into()
+            .expect("invalid bytecode (missing fixed-width operand)");
 
-        if self.code.len() - idx >= U64_VARINT_SIZE {
-            vu128::decode_u64(
-                &self.code[idx..idx + U64_VARINT_SIZE]
-                    .try_into()
-                    .expect("size statically checked"),
-            )
-        } else {
-            let mut tmp = [0u8; U64_VARINT_SIZE];
-            tmp[..self.code.len() - idx].copy_from_slice(&self.code[idx..]);
-            vu128::decode_u64(&tmp)
-        }
+        (u32::from_le_bytes(bytes) as u64, OPERAND_SIZE)
     }
 
     pub fn push_u16(&mut self, data: u16) {
@@ -359,9 +356,9 @@ mod tests {
 
         #[rustfmt::skip]
         let expected: Vec<u8> = vec![
-            Op::Constant as u8, 0,
-            Op::Jump as u8, 2, 0,
-            Op::Constant as u8, 1,
+            Op::Constant as u8, 0, 0, 0, 0,
+            Op::Jump as u8, 5, 0,
+            Op::Constant as u8, 1, 0, 0, 0,
             Op::Return as u8,
         ];
 
@@ -386,6 +383,6 @@ mod tests {
         chunk.push_op(Op::Return, dummy_span());
 
         assert_eq!(chunk.op_count(), 4);
-        assert_eq!(chunk.code.len(), 8);
+        assert_eq!(chunk.code.len(), 14);
     }
 }
