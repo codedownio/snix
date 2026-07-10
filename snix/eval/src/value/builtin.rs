@@ -22,6 +22,22 @@ use std::{
 pub trait BuiltinGen: Fn(Vec<Value>) -> Generator {}
 impl<F: Fn(Vec<Value>) -> Generator> BuiltinGen for F {}
 
+/// Function type of synchronous builtins.
+///
+/// Sync builtins never suspend the VM: all their arguments are strict (the
+/// VM forces them before the call, propagating catchables), and their body
+/// must not need any VM services (no forcing, calling, coercion, equality).
+pub type BuiltinSyncFn = fn(Vec<Value>) -> Result<Value, crate::ErrorKind>;
+
+#[derive(Clone)]
+enum BuiltinFunc {
+    /// Generator-based builtin, which may suspend the VM.
+    Gen(Rc<dyn BuiltinGen>),
+
+    /// Synchronous builtin (see [`BuiltinSyncFn`]).
+    Sync(BuiltinSyncFn),
+}
+
 #[derive(Clone)]
 pub struct BuiltinRepr {
     name: &'static str,
@@ -29,7 +45,7 @@ pub struct BuiltinRepr {
     documentation: Option<&'static str>,
     arg_count: usize,
 
-    func: Rc<dyn BuiltinGen>,
+    func: BuiltinFunc,
 
     /// Partially applied function arguments.
     partials: Vec<Value>,
@@ -42,6 +58,11 @@ pub enum BuiltinResult {
 
     /// Builtin was called and constructed a generator that the VM must run.
     Called(&'static str, Generator),
+
+    /// A synchronous builtin was fully applied; the VM must force the
+    /// arguments (all sync builtin arguments are strict) and invoke the
+    /// function directly.
+    CalledSync(&'static str, BuiltinSyncFn, Vec<Value>),
 }
 
 /// Represents a single built-in function which directly executes Rust
@@ -76,7 +97,24 @@ impl Builtin {
             name,
             documentation,
             arg_count,
-            func: Rc::new(func),
+            func: BuiltinFunc::Gen(Rc::new(func)),
+            partials: vec![],
+        }
+        .into()
+    }
+
+    /// Construct a synchronous builtin (see [`BuiltinSyncFn`]).
+    pub fn new_sync(
+        name: &'static str,
+        documentation: Option<&'static str>,
+        arg_count: usize,
+        func: BuiltinSyncFn,
+    ) -> Self {
+        BuiltinRepr {
+            name,
+            documentation,
+            arg_count,
+            func: BuiltinFunc::Sync(func),
             partials: vec![],
         }
         .into()
@@ -106,7 +144,12 @@ impl Builtin {
     /// applied or return the builtin if it is partially applied.
     pub fn call(self) -> BuiltinResult {
         if self.0.partials.len() == self.0.arg_count {
-            BuiltinResult::Called(self.0.name, (self.0.func)(self.0.partials))
+            match self.0.func {
+                BuiltinFunc::Gen(func) => BuiltinResult::Called(self.0.name, func(self.0.partials)),
+                BuiltinFunc::Sync(func) => {
+                    BuiltinResult::CalledSync(self.0.name, func, self.0.partials)
+                }
+            }
         } else {
             BuiltinResult::Partial(self)
         }
