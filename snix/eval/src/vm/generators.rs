@@ -347,6 +347,7 @@ where
                                                 upvalues,
                                                 ip: CodeIdx(0),
                                                 stack_offset: self.stack.len(),
+                                                span_hint: std::cell::Cell::new(0),
                                             },
                                         });
                                         return Ok(false);
@@ -443,6 +444,7 @@ where
                                     upvalues,
                                     ip: CodeIdx(0),
                                     stack_offset: self.stack.len(),
+                                    span_hint: std::cell::Cell::new(0),
                                 },
                             });
 

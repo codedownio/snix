@@ -149,6 +149,9 @@ struct BytecodeFrame {
 
     /// Stack offset, i.e. the frames "view" into the VM's full stack.
     stack_offset: usize,
+
+    /// Cursor for span lookups (see [`Chunk::get_span_hinted`]).
+    span_hint: std::cell::Cell<usize>,
 }
 
 impl BytecodeFrame {
@@ -198,10 +201,10 @@ impl BytecodeFrame {
         Err(kind).with_span(self, vm)
     }
 
-    /// Returns the current span. This is potentially expensive and should only
-    /// be used when actually constructing an error or warning.
+    /// Returns the current span, using this frame's cursor to make the
+    /// (typically monotonically advancing) lookup cheap.
     pub fn current_span(&self) -> Span {
-        self.chunk().get_span(self.ip - 1)
+        self.chunk().get_span_hinted(self.ip - 1, &self.span_hint)
     }
 }
 
@@ -671,6 +674,7 @@ where
                                 upvalues,
                                 ip: CodeIdx(0),
                                 stack_offset: self.stack.len(),
+                                span_hint: std::cell::Cell::new(0),
                             },
                         );
 
@@ -1442,6 +1446,7 @@ where
                         upvalues: closure.upvalues(),
                         ip: CodeIdx(0),
                         stack_offset,
+                        span_hint: std::cell::Cell::new(0),
                     },
                 );
 
@@ -1737,6 +1742,7 @@ where
             upvalues: Rc::new(Upvalues::with_capacity(0)),
             ip: CodeIdx(0),
             stack_offset: 0,
+            span_hint: std::cell::Cell::new(0),
         },
     });
 
