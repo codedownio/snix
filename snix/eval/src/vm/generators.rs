@@ -319,11 +319,26 @@ where
                         // this function prepares the frame stack and yields
                         // back to the outer VM loop.
                         VMRequest::ForceValue(value) => {
-                            self.reenqueue_generator(name, span, generator);
-                            self.enqueue_generator("force", span, |co| {
-                                value.force_owned_genco(co, span)
-                            });
-                            return Ok(false);
+                            // Fast path: non-thunk values and already-forced
+                            // thunks need no VM involvement — respond to the
+                            // generator directly instead of suspending it and
+                            // spawning a "force" generator that would resolve
+                            // to the same value.
+                            match value {
+                                Value::Thunk(ref t) if t.is_forced() => {
+                                    message = VMResponse::Value(t.value().clone());
+                                }
+                                Value::Thunk(_) => {
+                                    self.reenqueue_generator(name, span, generator);
+                                    self.enqueue_generator("force", span, |co| {
+                                        value.force_owned_genco(co, span)
+                                    });
+                                    return Ok(false);
+                                }
+                                _ => {
+                                    message = VMResponse::Value(value);
+                                }
+                            }
                         }
 
                         // Generator has requested a deep-force.
