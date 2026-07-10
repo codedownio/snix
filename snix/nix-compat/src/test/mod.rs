@@ -27,7 +27,7 @@ pub mod wire;
 /// [`FromStr`]: std::str::FromStr
 #[macro_export]
 macro_rules! btree_map {
-    () => { BTreeMap::new() };
+    () => { std::collections::BTreeMap::new() };
     ($($k:expr => $v:expr),+ $(,)?) => {{
         let mut ret = std::collections::BTreeMap::new();
         $(
@@ -60,9 +60,42 @@ macro_rules! btree_map {
 /// [`FromStr`]: std::str::FromStr
 #[macro_export]
 macro_rules! btree_set {
-    () => { BTreeSet::new() };
+    () => { std::collections::BTreeSet::new() };
     ($($v:expr),+ $(,)?) => {{
         let mut ret = std::collections::BTreeSet::new();
+        $(
+            ret.insert($v.parse().unwrap());
+        )+
+        ret
+    }};
+}
+
+/// Test helper to create a [`HashSet`] with values that support [`FromStr`]
+///
+/// # Examples
+/// ```
+/// use std::collections::HashSet;
+/// use std::net::IpAddr;
+/// use nix_compat::hash_set;
+///
+/// let mut m : HashSet<IpAddr> = HashSet::new();
+/// m.insert("127.0.0.1".parse().unwrap());
+/// m.insert("192.168.1.1".parse().unwrap());
+///
+/// let m2 : HashSet<IpAddr> = hash_set![
+///     "127.0.0.1",
+///     "192.168.1.1",
+/// ];
+/// assert_eq!(m, m2);
+/// ```
+///
+/// [`HashSet`]: std::collections::HashSet
+/// [`FromStr`]: std::str::FromStr
+#[macro_export]
+macro_rules! hash_set {
+    () => { std::collections::HashSet::new() };
+    ($($v:expr),+ $(,)?) => {{
+        let mut ret = std::collections::HashSet::new();
         $(
             ret.insert($v.parse().unwrap());
         )+
