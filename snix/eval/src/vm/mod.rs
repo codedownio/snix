@@ -532,21 +532,38 @@ where
                 }
 
                 Op::Force => {
-                    if let Some(Value::Thunk(_)) = self.stack.last() {
-                        let thunk = match self.stack_pop() {
-                            Value::Thunk(t) => t,
-                            _ => unreachable!(),
-                        };
+                    // Fast path: replace an already-forced thunk with its
+                    // value inline. Suspending this frame and spawning a
+                    // "force" generator (a boxed coroutine plus two trips
+                    // through the outer VM loop) would arrive at the same
+                    // single value-clone, at many times the cost. Blackholes,
+                    // suspended, native and nested thunks (is_forced() is
+                    // false for all of them) still take the generator path.
+                    let already_forced = match self.stack.last() {
+                        Some(Value::Thunk(t)) if t.is_forced() => Some(t.value().clone()),
+                        Some(Value::Thunk(_)) => None,
+                        _ => continue,
+                    };
 
-                        let gen_span = frame.current_span();
-
-                        self.push_bytecode_frame(span, frame);
-                        self.enqueue_generator("force", gen_span, |co| {
-                            Thunk::force(thunk, co, gen_span)
-                        });
-
-                        return Ok(false);
+                    if let Some(value) = already_forced {
+                        let top = self.stack.len() - 1;
+                        self.stack[top] = value;
+                        continue;
                     }
+
+                    let thunk = match self.stack_pop() {
+                        Value::Thunk(t) => t,
+                        _ => unreachable!(),
+                    };
+
+                    let gen_span = frame.current_span();
+
+                    self.push_bytecode_frame(span, frame);
+                    self.enqueue_generator("force", gen_span, |co| {
+                        Thunk::force(thunk, co, gen_span)
+                    });
+
+                    return Ok(false);
                 }
 
                 Op::GetUpvalue => {
@@ -1158,13 +1175,24 @@ where
             // Partially applied builtin is just pushed back on the stack.
             BuiltinResult::Partial(partial) => self.stack.push(Value::Builtin(partial)),
 
-            // Builtin is fully applied and the generator needs to be run by the VM.
-            BuiltinResult::Called(name, generator) => self.frames.push(Frame::Generator {
-                generator,
-                span,
-                name,
-                state: GeneratorState::Running,
-            }),
+            // Builtin is fully applied; run its generator inline until its
+            // first suspension. Most builtins complete on their first resume
+            // (especially now that forcing already-forced values is answered
+            // without suspending), so this skips a frame push and an outer
+            // VM loop round-trip per builtin call. If the generator does
+            // suspend, run_generator re-enqueues it and sets up the frame
+            // stack exactly as the outer loop would have.
+            BuiltinResult::Called(name, generator) => {
+                let frame_id = self.frames.len();
+                self.run_generator(
+                    name,
+                    span,
+                    frame_id,
+                    GeneratorState::Running,
+                    generator,
+                    None,
+                )?;
+            }
         }
 
         Ok(())
