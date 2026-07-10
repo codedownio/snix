@@ -116,7 +116,35 @@ pub static IO_WALL: WallPhase = WallPhase::new("io_wall");
 /// Union wall-clock during which a blob finalize (ingest write) is in flight.
 pub static WRITE_WALL: WallPhase = WallPhase::new("write_wall");
 
-const ALL_WALL: [&WallPhase; 2] = [&IO_WALL, &WRITE_WALL];
+// Per-phase wall-clock unions (each is a subset of IO_WALL). Together with WRITE_WALL these
+// decompose IO_WALL into what actually gates the build wall-clock under concurrency — the
+// cumulative [Phase] counters above are inflated ~Nx and can't be compared to the process wall.
+/// Union wall-clock of PathInfo lookups (includes nested substitute/fetch/write).
+pub static PATHINFO_WALL: WallPhase = WallPhase::new("pathinfo_wall");
+/// Union wall-clock of native fetches (fetchurl/FOD ingest).
+pub static FETCH_WALL: WallPhase = WallPhase::new("fetch_wall");
+/// Union wall-clock of on-demand derivation builds (bwrap).
+pub static BUILD_WALL: WallPhase = WallPhase::new("build_wall");
+/// Union wall-clock of output NAR calculation.
+pub static NAR_WALL: WallPhase = WallPhase::new("nar_wall");
+/// Union wall-clock of directory-tree descend during realise.
+pub static DESCEND_WALL: WallPhase = WallPhase::new("descend_wall");
+/// Union wall-clock of blob reads during eval/realise.
+pub static BLOB_READ_WALL: WallPhase = WallPhase::new("blob_read_wall");
+/// Union wall-clock of directory (dir_get) reads during eval/realise.
+pub static DIR_WALL: WallPhase = WallPhase::new("dir_wall");
+
+const ALL_WALL: [&WallPhase; 9] = [
+    &IO_WALL,
+    &WRITE_WALL,
+    &PATHINFO_WALL,
+    &FETCH_WALL,
+    &BUILD_WALL,
+    &NAR_WALL,
+    &DESCEND_WALL,
+    &BLOB_READ_WALL,
+    &DIR_WALL,
+];
 
 /// One-line JSON: {"phase":{"secs":1.2,"count":34},...}. WallPhase entries carry count 0.
 pub fn report_json() -> String {

@@ -97,7 +97,10 @@ impl BuildState {
         // To populate the input nodes, it might recursively trigger builds of
         // its dependencies too.
         let t_pi = std::time::Instant::now();
-        let io_pi = snix_store::perf_stats::IO_WALL.enter();
+        let io_pi = (
+            snix_store::perf_stats::IO_WALL.enter(),
+            snix_store::perf_stats::PATHINFO_WALL.enter(),
+        );
         let looked_up = self
             .path_info_service
             .as_ref()
@@ -130,7 +133,10 @@ impl BuildState {
                 .get_fetch_for_output_path(store_path);
             if let Some((name, fetch)) = maybe_fetch {
                 let t_fetch = std::time::Instant::now();
-                let io_fetch = snix_store::perf_stats::IO_WALL.enter();
+                let io_fetch = (
+                    snix_store::perf_stats::IO_WALL.enter(),
+                    snix_store::perf_stats::FETCH_WALL.enter(),
+                );
                 let (sp, path_info) = self
                     .fetcher
                     .ingest_and_persist(&name, fetch)
@@ -235,7 +241,10 @@ impl BuildState {
                 }
 
                 let t_build = std::time::Instant::now();
-                let io_build = snix_store::perf_stats::IO_WALL.enter();
+                let io_build = (
+                    snix_store::perf_stats::IO_WALL.enter(),
+                    snix_store::perf_stats::BUILD_WALL.enter(),
+                );
                 // Tail of the build transcript, carried in the error on failure: callers
                 // without a tracing subscriber otherwise only see "nonzero exit".
                 let mut transcript_tail = TranscriptTail::default();
@@ -331,7 +340,10 @@ impl BuildState {
                 {
                     // calculate the nar representation
                     let t_nar = std::time::Instant::now();
-                    let io_nar = snix_store::perf_stats::IO_WALL.enter();
+                    let io_nar = (
+                        snix_store::perf_stats::IO_WALL.enter(),
+                        snix_store::perf_stats::NAR_WALL.enter(),
+                    );
                     let (nar_size, nar_sha256) = self
                         .nar_calculation_service
                         .calculate_nar(&node)
@@ -375,7 +387,10 @@ impl BuildState {
 
         // now with the root_node and sub_path, descend to the node requested.
         let t_descend = std::time::Instant::now();
-        let io_descend = snix_store::perf_stats::IO_WALL.enter();
+        let io_descend = (
+            snix_store::perf_stats::IO_WALL.enter(),
+            snix_store::perf_stats::DESCEND_WALL.enter(),
+        );
         let node = descend_to(&self.directory_service, path_info.node.clone(), sub_path)
             .await
             .map_err(std::io::Error::other)?;
