@@ -112,6 +112,19 @@ impl<T, S: GetSpan, IO> WithSpan<T, S, IO> for Result<T, ErrorKind> {
                                 vm.source.clone(),
                             );
                         }
+                        // Stands in for the "force" generator frame that the
+                        // suspended-thunk fast path elides; chain the same
+                        // error the generator would have produced.
+                        Frame::UpdateThunk { span, .. } => {
+                            error = Error::new(
+                                ErrorKind::NativeError {
+                                    err: Box::new(error),
+                                    gen_type: "force",
+                                },
+                                *span,
+                                vm.source.clone(),
+                            );
+                        }
                     }
                 }
 
@@ -227,12 +240,26 @@ enum Frame {
         /// Generator itself, which can be resumed with `.resume()`.
         generator: Generator,
     },
+
+    /// Marker frame placed *under* a directly-entered thunk's bytecode frame
+    /// (see the suspended-thunk path of `Op::Force`). When it is reached, the
+    /// result value left on the stack by the frames above it is written back
+    /// into the thunk, replacing the blackhole installed on entry.
+    UpdateThunk {
+        /// The blackholed thunk to memoize the result into.
+        thunk: Thunk,
+
+        /// Span from which the force was initiated.
+        span: Span,
+    },
 }
 
 impl Frame {
     pub fn span(&self) -> Span {
         match self {
-            Frame::BytecodeFrame { span, .. } | Frame::Generator { span, .. } => *span,
+            Frame::BytecodeFrame { span, .. }
+            | Frame::Generator { span, .. }
+            | Frame::UpdateThunk { span, .. } => *span,
         }
     }
 }
@@ -459,6 +486,29 @@ where
                         Err(err) => return Err(err),
                     };
                 }
+
+                // The frames above this one have completed, leaving the
+                // thunk's result value on the stack; write it back into the
+                // (currently blackholed) thunk.
+                Frame::UpdateThunk { thunk, span } => {
+                    let value = self
+                        .stack
+                        .last()
+                        .expect("Snix bug: UpdateThunk frame reached with empty stack")
+                        .clone();
+
+                    if matches!(value, Value::Thunk(_)) {
+                        // The thunk evaluated to another thunk. Write it
+                        // through, then continue forcing via the generator
+                        // path, which flattens nested thunk chains and
+                        // replaces the stack top with the flattened value.
+                        self.stack.pop();
+                        thunk.set_evaluated(value);
+                        self.enqueue_generator("force", span, |co| Thunk::force(thunk, co, span));
+                    } else {
+                        thunk.set_evaluated(value);
+                    }
+                }
             }
         }
 
@@ -557,6 +607,32 @@ where
                     };
 
                     let gen_span = frame.current_span();
+
+                    // Directly enter the bytecode of a suspended thunk:
+                    // blackhole it, place an update frame to memoize the
+                    // result, and run its lambda as a plain bytecode frame.
+                    // This skips the "force" generator and its `EnterLambda`
+                    // round-trip for the common first-force case. Blackholed,
+                    // native and nested thunks fall through to the generator,
+                    // preserving cycle detection and flattening.
+                    if let Some((lambda, upvalues)) = thunk.take_suspended(gen_span) {
+                        self.push_bytecode_frame(span, frame);
+                        self.frames.push(Frame::UpdateThunk {
+                            thunk,
+                            span: gen_span,
+                        });
+                        self.push_bytecode_frame(
+                            gen_span,
+                            BytecodeFrame {
+                                lambda,
+                                upvalues,
+                                ip: CodeIdx(0),
+                                stack_offset: self.stack.len(),
+                            },
+                        );
+
+                        return Ok(false);
+                    }
 
                     self.push_bytecode_frame(span, frame);
                     self.enqueue_generator("force", gen_span, |co| {
