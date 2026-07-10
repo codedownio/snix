@@ -213,7 +213,10 @@ impl EvalIO for SnixStoreIO {
                         }
                         Node::File { digest, .. } => {
                             let t_blob = std::time::Instant::now();
-                            let io_blob = snix_store::perf_stats::IO_WALL.enter();
+                            let io_blob = (
+                                snix_store::perf_stats::IO_WALL.enter(),
+                                snix_store::perf_stats::BLOB_READ_WALL.enter(),
+                            );
                             let resp = self
                                 .build_state
                                 .blob_service
@@ -283,7 +286,10 @@ impl EvalIO for SnixStoreIO {
                         Node::Directory { digest, .. } => {
                             // fetch the Directory itself.
                             let t_dir = std::time::Instant::now();
-                            let io_dir = snix_store::perf_stats::IO_WALL.enter();
+                            let io_dir = (
+                                snix_store::perf_stats::IO_WALL.enter(),
+                                snix_store::perf_stats::DIR_WALL.enter(),
+                            );
                             let directory = self
                                 .build_state
                                 .directory_service
