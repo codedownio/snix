@@ -203,6 +203,32 @@ impl Thunk {
         }
     }
 
+    /// If this thunk is suspended, atomically blackhole it and return its
+    /// lambda and upvalues, so the VM can enter its bytecode directly
+    /// instead of spawning a "force" generator that would request the same
+    /// via `EnterLambda`. Returns `None` in every other state (evaluated,
+    /// blackholed, native, nested), which callers must route through the
+    /// regular forcing path.
+    pub(crate) fn take_suspended(&self, forced_at: Span) -> Option<(Rc<Lambda>, Rc<Upvalues>)> {
+        if !matches!(&*self.0.borrow(), ThunkRepr::Suspended { .. }) {
+            return None;
+        }
+
+        let blackhole = self.prepare_blackhole(forced_at);
+        match self.0.replace(blackhole) {
+            ThunkRepr::Suspended {
+                lambda, upvalues, ..
+            } => Some((lambda, upvalues)),
+            _ => unreachable!("thunk was checked to be suspended above"),
+        }
+    }
+
+    /// Overwrite this thunk's representation with an evaluated value,
+    /// replacing the blackhole installed by [`Thunk::take_suspended`].
+    pub(crate) fn set_evaluated(&self, value: Value) {
+        self.0.replace(ThunkRepr::Evaluated(value));
+    }
+
     pub async fn force(myself: Thunk, co: GenCo, span: Span) -> Result<Value, ErrorKind> {
         Self::force_(myself, &co, span).await
     }
