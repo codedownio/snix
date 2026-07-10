@@ -328,10 +328,32 @@ where
                                 Value::Thunk(ref t) if t.is_forced() => {
                                     message = VMResponse::Value(t.value().clone());
                                 }
-                                Value::Thunk(_) => {
+                                Value::Thunk(thunk) => {
                                     self.reenqueue_generator(name, span, generator);
+
+                                    // Directly enter a suspended thunk's
+                                    // bytecode (see the same path in
+                                    // Op::Force): the update frame leaves the
+                                    // result on the stack, where the awaiting
+                                    // requester picks it up on resume.
+                                    if let Some((lambda, upvalues)) =
+                                        thunk.take_suspended(span)
+                                    {
+                                        self.frames.push(Frame::UpdateThunk { thunk, span });
+                                        self.frames.push(Frame::BytecodeFrame {
+                                            span,
+                                            bytecode_frame: BytecodeFrame {
+                                                lambda,
+                                                upvalues,
+                                                ip: CodeIdx(0),
+                                                stack_offset: self.stack.len(),
+                                            },
+                                        });
+                                        return Ok(false);
+                                    }
+
                                     self.enqueue_generator("force", span, |co| {
-                                        value.force_owned_genco(co, span)
+                                        Thunk::force(thunk, co, span)
                                     });
                                     return Ok(false);
                                 }
