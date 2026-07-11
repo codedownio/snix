@@ -502,7 +502,7 @@ mod pure_builtins {
         let operator = attrs.select_required("operator")?;
 
         let mut res = Vec::new();
-        let mut done_keys: Vec<Value> = vec![];
+        let mut done_keys = ClosureKeys::default();
 
         while let Some(val) = work_set.pop_front() {
             let val = generators::request_force(&co, val).await;
@@ -1548,14 +1548,75 @@ mod pure_builtins {
     }
 }
 
+/// A hashable projection of scalar key values whose `Eq` matches `nix_eq`
+/// exactly. Numeric keys with integral values normalize to ints, mirroring
+/// nix's cross-type numeric equality (`1 == 1.0`); other floats key by bit
+/// pattern. NaN never projects (NaN != NaN under nix_eq, so it must take the
+/// linear path, where it never compares equal — same as before).
+#[derive(PartialEq, Eq, Hash)]
+enum ScalarKey {
+    Null,
+    Bool(bool),
+    Int(i64),
+    FloatBits(u64),
+    String(NixString),
+    Path(PathBuf),
+}
+
+impl ScalarKey {
+    fn project(v: &Value) -> Option<Self> {
+        match v {
+            Value::Null => Some(ScalarKey::Null),
+            Value::Bool(b) => Some(ScalarKey::Bool(*b)),
+            Value::Integer(i) => Some(ScalarKey::Int(*i)),
+            Value::Float(f) => {
+                if f.is_nan() {
+                    None
+                } else if f.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(f) {
+                    // `as` saturates at the bounds, consistently with how
+                    // nix_eq's `i as f64 == f` behaves there.
+                    Some(ScalarKey::Int(*f as i64))
+                } else {
+                    Some(ScalarKey::FloatBits(f.to_bits()))
+                }
+            }
+            Value::String(s) => Some(ScalarKey::String(s.clone())),
+            Value::Path(p) => Some(ScalarKey::Path((**p).clone())),
+            _ => None,
+        }
+    }
+}
+
+/// Key dedup state for genericClosure: scalar keys (the overwhelmingly common
+/// case) dedup through a hash set; everything else through the original
+/// linear equality scan. The pools are disjoint under nix_eq — a scalar and a
+/// non-scalar never compare equal, and comparing them cannot throw.
+#[derive(Default)]
+struct ClosureKeys {
+    scalars: FxHashMap<ScalarKey, ()>,
+    others: Vec<Value>,
+}
+
 /// Internal helper function for genericClosure, determining whether a
 /// value has been seen before.
 async fn bgc_insert_key(
     co: &GenCo,
     key: Value,
-    done: &mut Vec<Value>,
+    done: &mut ClosureKeys,
 ) -> Result<Result<bool, CatchableErrorKind>, ErrorKind> {
-    for existing in done.iter() {
+    // Force the key eagerly (CppNix does the same). Previously this happened
+    // implicitly inside the first equality check, meaning the very first key
+    // escaped forcing entirely.
+    let key = generators::request_force(co, key).await;
+    if let Value::Catchable(cek) = key {
+        return Ok(Err(*cek));
+    }
+
+    if let Some(sk) = ScalarKey::project(&key) {
+        return Ok(Ok(done.scalars.insert(sk, ()).is_none()));
+    }
+
+    for existing in done.others.iter() {
         if try_cek!(
             generators::check_equality(
                 co,
@@ -1570,7 +1631,7 @@ async fn bgc_insert_key(
         }
     }
 
-    done.push(key);
+    done.others.push(key);
     Ok(Ok(true))
 }
 
