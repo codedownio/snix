@@ -859,24 +859,16 @@ where
 
                 Op::Equal => lifted_pop! {
                     self(b, a) => {
-                        // Fast path: scalar comparisons need no generator.
-                        // These arms mirror the "trivial comparisons" in
-                        // Value::nix_eq exactly; everything else (thunks,
-                        // lists, attrs, closures, ...) takes the generator.
-                        let fast = match (&a, &b) {
-                            (Value::Null, Value::Null) => Some(true),
-                            (Value::Bool(b1), Value::Bool(b2)) => Some(b1 == b2),
-                            (Value::String(s1), Value::String(s2)) => Some(s1 == s2),
-                            (Value::Path(p1), Value::Path(p2)) => Some(p1 == p2),
-                            (Value::Integer(i1), Value::Integer(i2)) => Some(i1 == i2),
-                            (Value::Integer(i), Value::Float(f)) => Some(*i as f64 == *f),
-                            (Value::Float(f1), Value::Float(f2)) => Some(f1 == f2),
-                            (Value::Float(f), Value::Integer(i)) => Some(*f == *i as f64),
-                            _ => None,
-                        };
+                        // Fast path: attempt the comparison synchronously.
+                        // Only comparisons that hit an unforced thunk need
+                        // the generator-based nix_eq.
+                        let fast = a
+                            .clone()
+                            .nix_eq_sync(b.clone(), PointerEquality::ForbidAll)
+                            .with_span(&frame, self)?;
 
-                        if let Some(eq) = fast {
-                            self.stack.push(Value::Bool(eq));
+                        if let Some(result) = fast {
+                            self.stack.push(result);
                         } else {
                             let gen_span = frame.current_span();
                             match self.run_generator_over_frame(span, frame, "nix_eq", gen_span, |co| {

@@ -483,6 +483,203 @@ impl Value {
     /// The `top_level` parameter controls whether this invocation is the top-level
     /// comparison, or a nested value comparison. See
     /// `//snix/docs/value-pointer-equality.md`
+    /// Attempt the equality comparison synchronously, without any VM
+    /// involvement.
+    ///
+    /// This follows [`Value::nix_eq`] exactly, except that forcing points can
+    /// only be satisfied by already-forced thunks: encountering an unforced
+    /// (or blackholed, or nested) thunk returns `Ok(None)`, and the caller
+    /// must fall back to the generator-based [`Value::nix_eq`], which redoes
+    /// the (idempotent) comparison with VM support. In evaluation of real
+    /// code the operands are usually fully forced, so most comparisons
+    /// complete here, skipping the coroutine entirely.
+    pub(crate) fn nix_eq_sync(
+        self,
+        other: Value,
+        ptr_eq: PointerEquality,
+    ) -> Result<Option<Value>, ErrorKind> {
+        /// Resolve a value to its forced form if that requires no work,
+        /// i.e. it is a non-thunk or an already-forced thunk.
+        fn resolve(v: Value) -> Option<Value> {
+            match v {
+                Value::Thunk(ref t) => {
+                    if t.is_forced() {
+                        Some(t.value().clone())
+                    } else {
+                        None
+                    }
+                }
+                v => Some(v),
+            }
+        }
+
+        let mut vals = vec![((self, other), ptr_eq)];
+
+        loop {
+            let ((a, b), ptr_eq) = match vals.pop() {
+                Some(abp) => abp,
+                None => return Ok(Some(Value::Bool(true))),
+            };
+
+            // Thunk pointer equality, before any forcing (as in nix_eq).
+            if ptr_eq == PointerEquality::AllowAll
+                && let (Value::Thunk(t1), Value::Thunk(t2)) = (&a, &b)
+                && t1.ptr_eq(t2)
+            {
+                continue;
+            }
+
+            let Some(a) = resolve(a) else {
+                return Ok(None);
+            };
+            let Some(b) = resolve(b) else {
+                return Ok(None);
+            };
+
+            let result = match (a, b) {
+                // Trivial comparisons
+                (c @ Value::Catchable(_), _) => return Ok(Some(c)),
+                (_, c @ Value::Catchable(_)) => return Ok(Some(c)),
+                (Value::Null, Value::Null) => true,
+                (Value::Bool(b1), Value::Bool(b2)) => b1 == b2,
+                (Value::String(s1), Value::String(s2)) => s1 == s2,
+                (Value::Path(p1), Value::Path(p2)) => p1 == p2,
+
+                // Numerical comparisons (they work between float & int)
+                (Value::Integer(i1), Value::Integer(i2)) => i1 == i2,
+                (Value::Integer(i), Value::Float(f)) => i as f64 == f,
+                (Value::Float(f1), Value::Float(f2)) => f1 == f2,
+                (Value::Float(f), Value::Integer(i)) => i as f64 == f,
+
+                // List comparisons
+                (Value::List(l1), Value::List(l2)) => {
+                    if ptr_eq >= PointerEquality::AllowNested && l1.ptr_eq(&l2) {
+                        continue;
+                    }
+
+                    if l1.len() != l2.len() {
+                        return Ok(Some(Value::Bool(false)));
+                    }
+
+                    vals.extend(l1.into_iter().rev().zip(l2.into_iter().rev()).zip(
+                        std::iter::repeat(std::cmp::max(ptr_eq, PointerEquality::AllowNested)),
+                    ));
+                    continue;
+                }
+
+                (_, Value::List(_)) | (Value::List(_), _) => {
+                    return Ok(Some(Value::Bool(false)));
+                }
+
+                // Attribute set comparisons
+                (Value::Attrs(a1), Value::Attrs(a2)) => {
+                    if ptr_eq >= PointerEquality::AllowNested && a1.ptr_eq(&a2) {
+                        continue;
+                    }
+
+                    // Special-case for derivation comparisons: If both attribute sets
+                    // have `type = derivation`, compare them by `outPath`.
+                    #[allow(clippy::single_match)]
+                    match (a1.select("type"), a2.select("type")) {
+                        (Some(v1), Some(v2)) => {
+                            let Some(s1) = resolve(v1.clone()) else {
+                                return Ok(None);
+                            };
+                            if s1.is_catchable() {
+                                return Ok(Some(s1));
+                            }
+                            let Some(s2) = resolve(v2.clone()) else {
+                                return Ok(None);
+                            };
+                            if s2.is_catchable() {
+                                return Ok(Some(s2));
+                            }
+                            let s1 = s1.to_str();
+                            let s2 = s2.to_str();
+
+                            if let (Ok(s1), Ok(s2)) = (s1, s2)
+                                && s1 == "derivation"
+                                && s2 == "derivation"
+                            {
+                                let out1 = a1
+                                    .select_required("outPath")
+                                    .context("comparing derivations")?
+                                    .clone();
+
+                                let out2 = a2
+                                    .select_required("outPath")
+                                    .context("comparing derivations")?
+                                    .clone();
+
+                                let Some(out1) = resolve(out1) else {
+                                    return Ok(None);
+                                };
+                                let Some(out2) = resolve(out2) else {
+                                    return Ok(None);
+                                };
+
+                                if out1.is_catchable() {
+                                    return Ok(Some(out1));
+                                }
+
+                                if out2.is_catchable() {
+                                    return Ok(Some(out2));
+                                }
+
+                                let result =
+                                    out1.to_contextful_str()? == out2.to_contextful_str()?;
+                                if !result {
+                                    return Ok(Some(Value::Bool(false)));
+                                } else {
+                                    continue;
+                                }
+                            }
+                        }
+                        _ => {}
+                    };
+
+                    if a1.len() != a2.len() {
+                        return Ok(Some(Value::Bool(false)));
+                    }
+
+                    // note that it is important to be careful here with the
+                    // order we push the keys and values in order to properly
+                    // compare attrsets containing `throw` elements.
+                    let iter1 = a1.into_iter_sorted().rev();
+                    let iter2 = a2.into_iter_sorted().rev();
+                    for ((k1, v1), (k2, v2)) in iter1.zip(iter2) {
+                        vals.push((
+                            (v1, v2),
+                            std::cmp::max(ptr_eq, PointerEquality::AllowNested),
+                        ));
+                        vals.push((
+                            (k1.into(), k2.into()),
+                            std::cmp::max(ptr_eq, PointerEquality::AllowNested),
+                        ));
+                    }
+                    continue;
+                }
+
+                (Value::Attrs(_), _) | (_, Value::Attrs(_)) => {
+                    return Ok(Some(Value::Bool(false)));
+                }
+
+                (Value::Closure(c1), Value::Closure(c2))
+                    if ptr_eq >= PointerEquality::AllowNested && Rc::ptr_eq(&c1, &c2) =>
+                {
+                    continue;
+                }
+
+                // Everything else is either incomparable (e.g. internal types) or
+                // false.
+                _ => return Ok(Some(Value::Bool(false))),
+            };
+            if !result {
+                return Ok(Some(Value::Bool(false)));
+            }
+        }
+    }
+
     pub(crate) async fn nix_eq(
         self,
         other: Value,
