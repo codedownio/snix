@@ -344,9 +344,7 @@ where
                                     // Op::Force): the update frame leaves the
                                     // result on the stack, where the awaiting
                                     // requester picks it up on resume.
-                                    if let Some((lambda, upvalues)) =
-                                        thunk.take_suspended(span)
-                                    {
+                                    if let Some((lambda, upvalues)) = thunk.take_suspended(span) {
                                         self.frames.push(Frame::UpdateThunk { thunk, span });
                                         self.frames.push(Frame::BytecodeFrame {
                                             span,
@@ -445,9 +443,9 @@ where
                             // suspend, the frame stack is already in the exact
                             // shape the enqueue-based path would have set up.
                             let child = Gen::new(|co| {
-                                pin_generator(values.0.nix_eq_owned_genco(
-                                    values.1, co, ptr_eq, span,
-                                ))
+                                pin_generator(
+                                    values.0.nix_eq_owned_genco(values.1, co, ptr_eq, span),
+                                )
                             });
                             let frame_id = self.frames.len();
                             if self.run_generator(
@@ -794,6 +792,19 @@ pub(crate) async fn check_equality(
     b: Value,
     ptr_eq: PointerEquality,
 ) -> Result<Result<bool, CatchableErrorKind>, ErrorKind> {
+    // Fast path: attempt the comparison synchronously, avoiding the request
+    // round-trip through the VM (and its resume machinery) entirely. Only
+    // comparisons that hit an unforced thunk need the yield below.
+    match a.clone().nix_eq_sync(b.clone(), ptr_eq)? {
+        Some(Value::Bool(b)) => return Ok(Ok(b)),
+        Some(Value::Catchable(cek)) => return Ok(Err(*cek)),
+        Some(v) => panic!(
+            "Snix bug: nix_eq_sync returned non-bool/non-catchable: {}",
+            v.type_of()
+        ),
+        None => {}
+    }
+
     match co
         .yield_(VMRequest::NixEquality(Box::new((a, b)), ptr_eq))
         .await
