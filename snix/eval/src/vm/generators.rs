@@ -409,6 +409,31 @@ where
 
                         VMRequest::NixEquality(values, ptr_eq) => {
                             let values = *values;
+
+                            // Fast path: scalar comparisons are answered
+                            // directly, without suspending the requesting
+                            // generator or spawning a nix_eq generator. The
+                            // arms mirror the "trivial comparisons" in
+                            // Value::nix_eq exactly (scalars behave the same
+                            // under every PointerEquality mode); thunks,
+                            // catchables and nested values fall through.
+                            let fast = match (&values.0, &values.1) {
+                                (Value::Null, Value::Null) => Some(true),
+                                (Value::Bool(b1), Value::Bool(b2)) => Some(b1 == b2),
+                                (Value::String(s1), Value::String(s2)) => Some(s1 == s2),
+                                (Value::Path(p1), Value::Path(p2)) => Some(p1 == p2),
+                                (Value::Integer(i1), Value::Integer(i2)) => Some(i1 == i2),
+                                (Value::Integer(i), Value::Float(f)) => Some(*i as f64 == *f),
+                                (Value::Float(f1), Value::Float(f2)) => Some(f1 == f2),
+                                (Value::Float(f), Value::Integer(i)) => Some(*f == *i as f64),
+                                _ => None,
+                            };
+
+                            if let Some(eq) = fast {
+                                message = VMResponse::Value(Value::Bool(eq));
+                                continue;
+                            }
+
                             self.reenqueue_generator(name, span, generator);
                             self.enqueue_generator("nix_eq", span, |co| {
                                 values.0.nix_eq_owned_genco(values.1, co, ptr_eq, span)
