@@ -435,9 +435,42 @@ where
                             }
 
                             self.reenqueue_generator(name, span, generator);
-                            self.enqueue_generator("nix_eq", span, |co| {
-                                values.0.nix_eq_owned_genco(values.1, co, ptr_eq, span)
+
+                            // Run the nix_eq generator inline: comparisons
+                            // whose operands are already forced (the common
+                            // case, e.g. module-system option merging)
+                            // complete without suspending, skipping two frame
+                            // round-trips through the outer loop. Recursion is
+                            // bounded: nix_eq is internally iterative and
+                            // never requests equality itself. If it does
+                            // suspend, the frame stack is already in the exact
+                            // shape the enqueue-based path would have set up.
+                            let child = Gen::new(|co| {
+                                pin_generator(values.0.nix_eq_owned_genco(
+                                    values.1, co, ptr_eq, span,
+                                ))
                             });
+                            let frame_id = self.frames.len();
+                            if self.run_generator(
+                                "nix_eq",
+                                span,
+                                frame_id,
+                                GeneratorState::Running,
+                                child,
+                                None,
+                            )? {
+                                // Completed inline: reclaim our frame and
+                                // respond to it directly with the result.
+                                match self.frames.pop() {
+                                    Some(Frame::Generator { generator: g, .. }) => generator = g,
+                                    _ => unreachable!(
+                                        "Snix bug: requester frame lost under inline nix_eq"
+                                    ),
+                                }
+                                message = VMResponse::Value(self.stack_pop());
+                                continue;
+                            }
+
                             return Ok(false);
                         }
 
