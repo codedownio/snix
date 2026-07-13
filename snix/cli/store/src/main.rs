@@ -513,6 +513,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // We need another one, as they are used inside various async closures.
             let copy_paths_span2 = copy_paths_span.clone();
 
+            // Publishing a path's PathInfo is what makes it "valid". Track which paths we've
+            // published so each path's PathInfo write can be held until every path it references is
+            // published (see the wait before `put` below) -- otherwise a concurrent reader (another
+            // store copying a shared closure, or a build using this store as a lower/substituter)
+            // can observe a path as valid while a path it references is not yet, and fail with
+            // "path '<ref>' is not valid".
+            let written = tokio::sync::Mutex::new(std::collections::HashSet::<[u8; 20]>::new());
+
             let mut source = snix_cli::reader_for_path(reference_graph_path).await?;
 
             // Create a stream producing io::Result<PathMetadata>.
@@ -534,8 +542,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                     copy_paths_span2.pb_set_length(reference_graph.len() as u64);
 
-                    for path_metadata in reference_graph {
-                        yield path_metadata;
+                    // Emit references before referrers (topological order). With the per-path wait
+                    // below this keeps a path's PathInfo from being published before its closure's,
+                    // and avoids a buffer_unordered deadlock: a path's references are always polled
+                    // before it, so the wait can never block on a path stuck behind the window.
+                    let n = reference_graph.len();
+                    let idx_of: std::collections::HashMap<[u8; 20], usize> = reference_graph
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| (*p.path.digest(), i))
+                        .collect();
+                    let mut indeg = vec![0usize; n];
+                    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+                    for (i, p) in reference_graph.iter().enumerate() {
+                        for r in &p.references {
+                            if let Some(&j) = idx_of.get(r.digest()) {
+                                if j != i {
+                                    indeg[i] += 1;
+                                    dependents[j].push(i);
+                                }
+                            }
+                        }
+                    }
+                    let mut queue: std::collections::VecDeque<usize> =
+                        (0..n).filter(|&i| indeg[i] == 0).collect();
+                    let mut order: Vec<usize> = Vec::with_capacity(n);
+                    while let Some(j) = queue.pop_front() {
+                        order.push(j);
+                        for &i in &dependents[j] {
+                            indeg[i] -= 1;
+                            if indeg[i] == 0 {
+                                queue.push_back(i);
+                            }
+                        }
+                    }
+                    // Defensive: if a cycle left some out (shouldn't happen for a store DAG),
+                    // append the remainder so nothing is dropped.
+                    if order.len() < n {
+                        let mut seen = vec![false; n];
+                        for &i in &order {
+                            seen[i] = true;
+                        }
+                        for i in 0..n {
+                            if !seen[i] {
+                                order.push(i);
+                            }
+                        }
+                    }
+                    let mut taken: Vec<Option<PathMetadata>> =
+                        reference_graph.into_iter().map(Some).collect();
+                    for idx in order {
+                        if let Some(pm) = taken[idx].take() {
+                            yield pm;
+                        }
                     }
                 }
             };
@@ -570,6 +629,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 .is_some()
                             {
                                 debug!(path_into.store_path=%store_path, "skipped, already exists");
+                                // Already present in the destination; record so referrers don't wait on it.
+                                written.lock().await.insert(*store_path.digest());
                                 return Ok(());
                             }
 
@@ -583,6 +644,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             .instrument(span.clone())
                             .await
                             .map_err(std::io::Error::other)?;
+
+                            // Hold off publishing this path's PathInfo until every path it
+                            // references is already published, so it never becomes "valid" before
+                            // its closure does. (Blob/directory ingestion above is unordered and
+                            // concurrent; only this PathInfo write needs reference ordering.) Input
+                            // is topologically ordered, so this rarely blocks and cannot deadlock;
+                            // the timeout is only a last-resort backstop.
+                            let self_digest = *store_path.digest();
+                            let ref_digests: Vec<[u8; 20]> =
+                                references.iter().map(|r| *r.digest()).collect();
+                            let mut waited_ms: u64 = 0;
+                            loop {
+                                let pending = {
+                                    let w = written.lock().await;
+                                    ref_digests
+                                        .iter()
+                                        .any(|d| *d != self_digest && !w.contains(d))
+                                };
+                                if !pending || waited_ms >= 300_000 {
+                                    break;
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                                waited_ms += 10;
+                            }
 
                             // Insert into PathInfoService.
                             let path_info = PathInfo {
@@ -601,6 +686,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 .await
                                 .map_err(std::io::Error::other)?;
 
+                            // Now published: let paths that reference it proceed.
+                            written.lock().await.insert(self_digest);
                             info!("uploaded path");
 
                             Ok::<_, std::io::Error>(())
