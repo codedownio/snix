@@ -348,19 +348,22 @@ fn attr_to_fuse_entry(attr: Attr) -> Entry {
     }
 }
 
-/// Returns the u32 fuse type
+/// Returns the readdir `d_type` (a `libc::DT_*` value) for a node.
+///
+/// This is the readdir/getdents `d_type`, NOT the `st_mode` file-type bits: the FUSE
+/// `DirEntry.type_` field (and the kernel `dirent.d_type` it feeds) expects `DT_*`, not `S_IF*`.
+/// Returning `S_IFDIR` (0o040000) here left every entry's low byte 0 == `DT_UNKNOWN`, which breaks
+/// tools that trust `d_type` without an `lstat` fallback -- e.g. `lndir`, so `symlinkJoin`/`buildEnv`
+/// builds produced whole-directory symlinks instead of a deep per-file merge. (getattr/lookup still
+/// report the correct `S_IFDIR|…` mode via inode_data_to_attr; only the readdir d_type was wrong.)
 fn node_to_fuse_type(node: &Node) -> u32 {
-    #[allow(clippy::let_and_return)]
     let ty = match node {
-        Node::Directory { .. } => libc::S_IFDIR,
-        Node::File { .. } => libc::S_IFREG,
-        Node::Symlink { .. } => libc::S_IFLNK,
+        Node::Directory { .. } => libc::DT_DIR,
+        Node::File { .. } => libc::DT_REG,
+        Node::Symlink { .. } => libc::DT_LNK,
     };
-    // libc::S_IFDIR is u32 on Linux and u16 on MacOS
-    #[cfg(target_os = "macos")]
-    let ty = ty as u32;
-
-    ty
+    // libc::DT_* are u8 on both Linux and macOS.
+    ty as u32
 }
 
 const XATTR_NAME_DIRECTORY_DIGEST: &[u8] = b"user.snix.castore.directory.digest";
@@ -960,5 +963,28 @@ where
         } else {
             Ok(ListxattrReply::Names(xattrs_names.to_vec()))
         }
+    }
+}
+
+#[cfg(test)]
+mod node_to_fuse_type_tests {
+    use super::node_to_fuse_type;
+    use crate::{Node, fixtures::DIRECTORY_A};
+
+    /// Regression: the FUSE `DirEntry.type_` (kernel `dirent.d_type`) must be a `DT_*` value, not
+    /// the `S_IF*` st_mode bits. Returning `S_IFDIR` (0o040000) left every entry's `d_type` byte 0
+    /// == `DT_UNKNOWN`, which made `lndir` emit whole-dir symlinks (broken `symlinkJoin`/`buildEnv`
+    /// deep merge). The existing fs tests only `lstat` (getattr), which masks this.
+    #[test]
+    fn returns_dt_star_not_s_if_star() {
+        let dir = Node::Directory { digest: DIRECTORY_A.digest(), size: DIRECTORY_A.size() };
+        let file = Node::File { digest: DIRECTORY_A.digest(), size: 0, executable: false };
+        let symlink = Node::Symlink { target: "target".try_into().unwrap() };
+
+        assert_eq!(node_to_fuse_type(&dir), libc::DT_DIR as u32);
+        assert_eq!(node_to_fuse_type(&file), libc::DT_REG as u32);
+        assert_eq!(node_to_fuse_type(&symlink), libc::DT_LNK as u32);
+        // guard the specific regression: never the st_mode type bits
+        assert_ne!(node_to_fuse_type(&dir), libc::S_IFDIR);
     }
 }
