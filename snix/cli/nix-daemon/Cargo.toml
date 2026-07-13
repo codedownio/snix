@@ -26,6 +26,8 @@ tokio = { workspace = true, features = [
 ] }
 tokio-listener = { workspace = true, features = ["clap", "sd_listen"] }
 tracing.workspace = true
+futures.workspace = true
+tonic.workspace = true
 
 [features]
 default = ["otlp"]
