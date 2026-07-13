@@ -90,12 +90,20 @@ where
             // procfs can't be mounted from a nested user namespace there).
             let userns = !url.query_pairs().any(|(k, v)| k == "userns" && v == "off");
 
+            // Optional `?concurrency=N`: how many builds may run at once (default 2).
+            let concurrency = url
+                .query_pairs()
+                .find(|(k, _)| k == "concurrency")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(2);
+
             Arc::new(BubblewrapBuildService::new(
                 url.path().into(),
                 blob_service,
                 directory_service,
                 external_store,
                 userns,
+                concurrency,
             ))
         }
         scheme => {
