@@ -201,6 +201,13 @@ enum UploadSource {
         /// The number of paths to ingest concurrently.
         #[arg(long, default_value_t = 10)]
         concurrency: usize,
+
+        /// Re-ingest every path even if its PathInfo already exists in the destination. Use this to
+        /// backfill missing blobs/directories for paths whose PathInfo is present but whose content
+        /// was never fully stored (e.g. a store populated with only runtime closures, where
+        /// build-time-only deps are dangling references).
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
 
     /// Uploads individual store paths.
@@ -549,6 +556,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 UploadSource::ReferenceGraph {
                     reference_graph_path,
                     concurrency,
+                    force,
                 } => {
                     let reference_graph = {
                         let mut source = snix_cli::reader_for_path(reference_graph_path).await?;
@@ -565,6 +573,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         directory_service,
                         path_info_service,
                         concurrency,
+                        force,
                     )
                     .await?;
                 }

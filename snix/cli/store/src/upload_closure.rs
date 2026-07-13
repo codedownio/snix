@@ -23,6 +23,8 @@ use crate::path_metadata::PathMetadata;
 ///  - the contents have been uploaded
 ///  - all referenced paths have been fully uploaded (or already existed before)
 ///
+/// Paths whose PathInfo already exists are skipped, unless `force` is set.
+///
 // FUTUREWORK: This does not re-calculate the NAR Hash/Size.
 // Should probably be configurable.
 #[tracing::instrument(skip_all, fields(indicatif.pb_show = tracing::field::Empty), err)]
@@ -32,6 +34,7 @@ pub async fn upload_closure<PS, DS, BE>(
     directory_service: DS,
     path_info_service: PS,
     ingest_concurrency: usize,
+    force: bool,
 ) -> Result<Vec<PathInfo>, Box<dyn std::error::Error + Send + Sync + 'static>>
 where
     PS: PathInfoService,
@@ -58,7 +61,9 @@ where
     for (store_path, path_metadata) in &reference_graph {
         // Check if the PathInfo already exists. If it does, we don't need to do any work,
         // so add an empty metadata task for other tasks to depend on.
-        if path_info_service.has(*store_path.digest()).await? {
+        // With `force`, re-ingest regardless, to backfill missing blobs/directories for paths
+        // whose PathInfo is present but whose content was never fully stored.
+        if !force && path_info_service.has(*store_path.digest()).await? {
             dag.insert(
                 DagKey::PathInfo { store_path },
                 [].into(), // we transitively assume this also means all children exist.
