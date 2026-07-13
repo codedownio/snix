@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use futures::stream::BoxStream;
+use futures::{StreamExt, stream::BoxStream};
 use snix_castore::{
     blob_engine::BlobEngine, directoryservice::DirectoryService, fs::fuse::FuseDaemon,
 };
-use tracing::{Span, info, instrument};
+use tracing::{Span, info, instrument, warn};
 use uuid::Uuid;
 
 use super::BuildService;
@@ -29,6 +29,9 @@ pub struct BubblewrapBuildService<BE, DS> {
     /// request's inputs. When set, the sandbox reads inputs through this mount (and its cache).
     external_store: Option<PathBuf>,
 
+    /// Whether the sandbox unshares a user namespace (see [SandboxSpec::userns]).
+    userns: bool,
+
     // semaphore to track number of concurrently running builds.
     // this is necessary, as otherwise we very quickly run out of open file handles.
     concurrent_builds: tokio::sync::Semaphore,
@@ -39,6 +42,7 @@ impl<BS, DS> BubblewrapBuildService<BS, DS> {
         blob_engine: BS,
         directory_service: DS,
         external_store: Option<PathBuf>,
+        userns: bool,
     ) -> Self {
         // We map root inside the container to the uid/gid this is running at,
         // and allocate one for uid 1000 into the container from the range we
@@ -49,6 +53,7 @@ impl<BS, DS> BubblewrapBuildService<BS, DS> {
             blob_engine,
             directory_service,
             external_store,
+            userns,
             concurrent_builds: tokio::sync::Semaphore::new(2),
         }
     }
@@ -113,6 +118,7 @@ where
                     .constraints
                     .contains(&BuildConstraints::NetworkAccess),
             )
+            .userns(self.userns)
             .provide_shell(
                 request
                     .constraints
@@ -139,7 +145,7 @@ where
 
         let spec = self.make_spec(request, &sandbox_path);
 
-        run_build_streaming(
+        let updates = run_build_streaming(
             &self.concurrent_builds,
             self.blob_engine.clone(),
             self.directory_service.clone(),
@@ -150,6 +156,57 @@ where
                 let (stream, finder) = Bwrap::initialize(spec)?.run()?;
                 Ok((stream, finder))
             },
-        )
+        );
+
+        persist_transcript(updates, sandbox_path)
     }
+}
+
+/// Always persist the sandbox transcript next to the sandbox, success or failure, as it streams
+/// by: `<sandbox>/build-stdout.log` and `<sandbox>/build-stderr.log`. A 0-exit build can still
+/// be silently wrong (e.g. stdenv phases no-op'ing), and this is the only record of what ran; a
+/// driver (nox) stages these files as the build's log. Best-effort: a write failure is logged
+/// once and never fails the build.
+fn persist_transcript(
+    updates: BoxStream<'_, BuildUpdate>,
+    sandbox_path: PathBuf,
+) -> BoxStream<'_, BuildUpdate> {
+    use std::io::Write;
+
+    let mut files: Option<(std::fs::File, std::fs::File)> = None;
+    let mut dead = false;
+    let open = move |name: &str| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(sandbox_path.join(name))
+    };
+    updates
+        .inspect(move |update| {
+            if dead {
+                return;
+            }
+            let (data, which): (&[u8], usize) = match update {
+                BuildUpdate::ProducedStdout(d) => (d.as_slice(), 0),
+                BuildUpdate::ProducedStderr(d) => (d.as_slice(), 1),
+                _ => return,
+            };
+            if files.is_none() {
+                match (open("build-stdout.log"), open("build-stderr.log")) {
+                    (Ok(out), Ok(err)) => files = Some((out, err)),
+                    (Err(e), _) | (_, Err(e)) => {
+                        warn!(error = %e, "cannot persist build transcript");
+                        dead = true;
+                        return;
+                    }
+                }
+            }
+            let (out, err) = files.as_mut().expect("opened above");
+            let file = if which == 0 { out } else { err };
+            if let Err(e) = file.write_all(data) {
+                warn!(error = %e, "failed writing build transcript; no longer persisting");
+                dead = true;
+            }
+        })
+        .boxed()
 }

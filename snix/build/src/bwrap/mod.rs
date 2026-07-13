@@ -19,11 +19,6 @@ const COMMON_BWRAP_ARGS: &[&str] = &[
     "--unshare-pid",
     "--die-with-parent",
     "--as-pid-1",
-    "--unshare-user",
-    "--uid",
-    "1000",
-    "--gid",
-    "100",
     "--clearenv",
     "--tmpfs",
     "/",
@@ -34,6 +29,10 @@ const COMMON_BWRAP_ARGS: &[&str] = &[
     "--tmpfs",
     "/tmp",
 ];
+
+/// Only with [SandboxSpec::userns]: unshare a user namespace and become nixbld inside it.
+/// (--uid/--gid require --unshare-user; without it the build runs as the invoking user.)
+const USERNS_BWRAP_ARGS: &[&str] = &["--unshare-user", "--uid", "1000", "--gid", "100"];
 
 const ETC_PASSWD: &[u8] = b"
 root:x:0:0:Nix build user:/build:/noshell
@@ -153,6 +152,9 @@ impl Bwrap {
         let scratch_dir = spec.host_workdir().join("scratches");
         fs::create_dir_all(&scratch_dir)?;
         let mut args: Vec<OsString> = COMMON_BWRAP_ARGS.iter().map(|s| s.into()).collect();
+        if spec.userns() {
+            args.extend(USERNS_BWRAP_ARGS.iter().map(OsString::from));
+        }
         if !spec.allow_network() {
             args.push("--unshare-net".into());
         }
@@ -179,8 +181,7 @@ impl Bwrap {
         //    writable scratch, and only the build's declared input paths are bound read-only into it
         //    from the mount. The output path is never in view, so the build creates it fresh — this
         //    is the correct, pure form. bwrap binds inside its own userns, so no extra privilege.
-        let declared =
-            spec.external_inputs().is_some() && !spec.external_input_names().is_empty();
+        let declared = spec.external_inputs().is_some() && !spec.external_input_names().is_empty();
         let inputs_src: OsString = match spec.external_inputs() {
             Some(ext) => ext.into(),
             None => Path::new("/").join(&host_inputs_dir).into(),
@@ -282,21 +283,22 @@ impl Bwrap {
             "/etc/group".into(),
         ]);
         if spec.allow_network() {
+            // -try: minimal containers (e.g. dockerTools images) may lack /etc/services or even
+            // /etc/hosts; a plain --ro-bind of a missing source makes bwrap itself fail.
             args.extend([
-                "--ro-bind".into(),
+                "--ro-bind-try".into(),
                 "/etc/hosts".into(),
                 "/etc/hosts".into(),
-                "--ro-bind".into(),
+                "--ro-bind-try".into(),
                 "/etc/resolv.conf".into(),
                 "/etc/resolv.conf".into(),
-                "--ro-bind".into(),
+                "--ro-bind-try".into(),
                 "/etc/services".into(),
                 "/etc/services".into(),
                 "--ro-bind".into(),
                 etc.join("nsswitch.conf").into(),
                 "/etc/nsswitch.conf".into(),
             ]);
-            //TODO: Create /etc/nsswitch.conf with: "hosts: files dns\nservices: files\n"
         } else {
             // Use predefined /etc/hosts like nix does.
             // Among other things it is required for libuv getaddrinfo() tests to pass.
