@@ -83,7 +83,7 @@ impl SnixStoreIO {
     /// [StorePath]: nix_compat::store_path::StorePath
     /// [descend_to]: snix_castore::directoryservice::traversal::descend_to
     #[instrument(skip(self, store_path), fields(store_path=%store_path, indicatif.pb_show=tracing::field::Empty), ret(level = Level::TRACE), err(level = Level::TRACE))]
-    async fn store_path_to_path_info(
+    pub(crate) async fn store_path_to_path_info(
         &self,
         store_path: &StorePathRef<'_>,
         sub_path: &snix_castore::Path,
@@ -91,6 +91,46 @@ impl SnixStoreIO {
         self.build_state
             .store_path_to_path_info(store_path, sub_path)
             .await
+    }
+
+    /// Re-key an already-in-castore [Node] as a recursive NAR-content-addressed store path and
+    /// persist its PathInfo. This is the store-native equivalent of the tail of
+    /// [snix_store::import::import_path_as_nar_ca], for when the source content is already in
+    /// castore (nothing to ingest from a filesystem).
+    async fn node_to_nar_ca_path_info(
+        &self,
+        name: &str,
+        node: Node,
+    ) -> io::Result<PathInfo> {
+        use nix_compat::nixhash::{CAHash, NixHash};
+        let (nar_size, nar_sha256) = self
+            .build_state
+            .nar_calculation_service
+            .calculate_nar(&node)
+            .await
+            .map_err(io::Error::other)?;
+        let hash = NixHash::Sha256(nar_sha256);
+        let output_path =
+            nix_compat::store_path::build_ca_path(name, true, &hash, [], false).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("invalid name: {name}"))
+            })?;
+        let path_info = PathInfo {
+            store_path: output_path.to_owned(),
+            node,
+            references: vec![],
+            nar_size,
+            nar_sha256,
+            signatures: vec![],
+            deriver: None,
+            ca: Some(CAHash::Nar(hash)),
+        };
+        self.build_state
+            .path_info_service
+            .as_ref()
+            .put(path_info.clone())
+            .await
+            .map_err(io::Error::other)?;
+        Ok(path_info)
     }
 }
 
@@ -105,7 +145,7 @@ fn node_get_type(node: &Node) -> FileType {
 
 // Helper function converting a [std::path::Path] to a [StorePath] and [snix_castore::Path].
 #[cfg(unix)]
-fn parse_store_and_sub_path<'a>(
+pub(crate) fn parse_store_and_sub_path<'a>(
     path: &'a std::path::Path,
 ) -> io::Result<(StorePathRef<'a>, &'a snix_castore::Path)> {
     let (store_path, rest) =
@@ -276,16 +316,29 @@ impl EvalIO for SnixStoreIO {
                 "path without basename encountered",
             )
         })?;
-        let path_info = self.tokio_handle.block_on({
+        let name = nix_compat::store_path::validate_name_from_os_str(file_name)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+            .to_owned();
+
+        let path_info = self.tokio_handle.block_on(async {
+            // If `path` already resolves inside the store (its tree lives in castore, e.g. a
+            // subpath of nixpkgs during a full-snix eval where nothing is materialized on the
+            // real filesystem), re-key that castore node into a NAR-CA path instead of walking
+            // the real filesystem — which wouldn't have the tree.
+            if let Ok((store_path, sub_path)) = parse_store_and_sub_path(path)
+                && let Some(pi) = self.store_path_to_path_info(&store_path, sub_path).await?
+            {
+                return self.node_to_nar_ca_path_info(&name, pi.node).await;
+            }
             snix_store::import::import_path_as_nar_ca(
                 path,
-                nix_compat::store_path::validate_name_from_os_str(file_name)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+                &name,
                 &self.build_state.blob_service,
                 &self.build_state.directory_service,
                 &self.build_state.path_info_service,
                 &self.build_state.nar_calculation_service,
             )
+            .await
         })?;
 
         // From the returned PathInfo, extract the store path and return it.

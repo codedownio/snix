@@ -60,6 +60,13 @@ where
     }
 
     fn file_type(&self, path: &Path) -> io::Result<FileType> {
+        // The bundled corepkgs fetchurl.nix (see `open`) is a synthetic regular file. `import`
+        // now file-types the path it resolves (to decide whether to append `default.nix`), so it
+        // must be answered here too — the underlying store IO would consult the real filesystem
+        // and fail, since `/__corepkgs__` doesn't exist on disk.
+        if path.starts_with("/__corepkgs__/fetchurl.nix") {
+            return Ok(FileType::Regular);
+        }
         self.actual.as_ref().file_type(path)
     }
 
