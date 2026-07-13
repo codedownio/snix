@@ -1,16 +1,165 @@
 //! Implements builtins used to import paths in the store.
 
 use crate::snix_store_io::SnixStoreIO;
-use snix_castore::Node;
 use snix_castore::import::ingest_entries;
+use snix_castore::{Directory, Node, PathComponent};
 use snix_eval::{
     ErrorKind, EvalIO, Value,
     builtin_macros::builtins,
     generators::{self, GenCo},
 };
+use std::future::Future;
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+use std::pin::Pin;
 
 use std::rc::Rc;
+
+/// Apply a `filterSource`/`builtins.path` filter to a directory tree that lives in castore
+/// (nothing materialized on the real filesystem), producing a new filtered root [Node]. This is
+/// the castore-native counterpart of [filtered_ingest]'s `walkdir`. `base_path` is the store path
+/// the filter sees (the filter is called with each child's absolute path and its type).
+///
+/// The rebuilt directories are streamed as one self-contained closure: backends may validate
+/// per-stream connectivity, so per-directory puts of a tree sharing subtrees don't pass.
+fn castore_filtered_tree<'a>(
+    state: Rc<SnixStoreIO>,
+    co: &'a GenCo,
+    dir_node: Node,
+    base_path: std::path::PathBuf,
+    filter: &'a Value,
+) -> Pin<Box<dyn Future<Output = Result<Node, ErrorKind>> + 'a>> {
+    Box::pin(async move {
+        let collected = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let root = castore_filtered_node(
+            state.clone(),
+            co,
+            dir_node,
+            base_path.clone(),
+            filter,
+            collected.clone(),
+        )
+        .await?;
+        if let Node::Directory { digest, .. } = &root {
+            // Dedup identical subtrees; recursion order is already leaves-to-root.
+            let mut seen = std::collections::HashSet::new();
+            let directories: Vec<Directory> = collected
+                .take()
+                .into_iter()
+                .filter(|d| seen.insert(d.digest()))
+                .collect();
+            let closure_digest = state
+                .tokio_handle
+                .block_on(async {
+                    let mut putter = state.build_state.directory_service.put_multiple_start();
+                    for directory in directories {
+                        putter.put(directory).await?;
+                    }
+                    putter.close().await
+                })
+                .map_err(|e| ErrorKind::IO {
+                    path: Some(base_path.clone()),
+                    error: Rc::new(std::io::Error::other(e)),
+                })?;
+            if closure_digest != *digest {
+                return Err(ErrorKind::IO {
+                    path: Some(base_path),
+                    error: Rc::new(std::io::Error::other(
+                        "filtered tree closure digest mismatch",
+                    )),
+                });
+            }
+        }
+        Ok(root)
+    })
+}
+
+/// The recursive part of [castore_filtered_tree]: rebuilds the kept subtree, pushing every
+/// rebuilt [Directory] into `collected` (children before parents) instead of putting it.
+fn castore_filtered_node<'a>(
+    state: Rc<SnixStoreIO>,
+    co: &'a GenCo,
+    dir_node: Node,
+    base_path: std::path::PathBuf,
+    filter: &'a Value,
+    collected: Rc<std::cell::RefCell<Vec<Directory>>>,
+) -> Pin<Box<dyn Future<Output = Result<Node, ErrorKind>> + 'a>> {
+    Box::pin(async move {
+        let digest = match &dir_node {
+            Node::Directory { digest, .. } => digest.clone(),
+            // Non-directory root: nothing to filter, keep as-is.
+            _ => return Ok(dir_node),
+        };
+        // Fetch the Directory contents from castore (tokio op — block_on, not .await).
+        let directory = state
+            .tokio_handle
+            .block_on(state.build_state.directory_service.get(&digest))
+            .map_err(|e| ErrorKind::IO {
+                path: Some(base_path.clone()),
+                error: Rc::new(std::io::Error::other(e)),
+            })?
+            .ok_or_else(|| ErrorKind::IO {
+                path: Some(base_path.clone()),
+                error: Rc::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "directory not found in castore",
+                )),
+            })?;
+
+        let mut kept: Vec<(PathComponent, Node)> = Vec::new();
+        for (name, node) in directory.into_nodes() {
+            let child_path = base_path.join(std::ffi::OsStr::from_bytes(name.as_ref()));
+            let type_str = match node {
+                Node::Directory { .. } => "directory",
+                Node::File { .. } => "regular",
+                Node::Symlink { .. } => "symlink",
+            };
+            let should_keep = generators::request_force(
+                co,
+                generators::request_call_with(
+                    co,
+                    filter.clone(),
+                    [
+                        Value::String(child_path.as_os_str().as_encoded_bytes().into()),
+                        Value::String(type_str.into()),
+                    ],
+                )
+                .await,
+            )
+            .await
+            .as_bool()?;
+            if !should_keep {
+                continue;
+            }
+            let child = if matches!(node, Node::Directory { .. }) {
+                castore_filtered_node(
+                    state.clone(),
+                    co,
+                    node,
+                    child_path,
+                    filter,
+                    collected.clone(),
+                )
+                .await?
+            } else {
+                node
+            };
+            kept.push((name, child));
+        }
+
+        let new_dir = Directory::try_from_iter(kept).map_err(|e| ErrorKind::IO {
+            path: Some(base_path.clone()),
+            error: Rc::new(std::io::Error::other(e)),
+        })?;
+        let size = new_dir.size();
+        let new_digest = new_dir.digest();
+        collected.borrow_mut().push(new_dir);
+        Ok(Node::Directory {
+            digest: new_digest,
+            size,
+        })
+    })
+}
 
 async fn filtered_ingest(
     state: Rc<SnixStoreIO>,
@@ -263,28 +412,30 @@ mod import_builtins {
                 return Err(ImportError::FlatImportOfNonFile(path))?;
             }
 
-            // Directory. When the source already lives in castore (e.g. a subpath of nixpkgs in a
-            // full-snix eval, nothing materialized on the real fs) and there's no filter to apply,
-            // take the castore node directly instead of walking the filesystem. A filter still
-            // requires the filesystem walk (FUTUREWORK: walk castore applying the filter).
+            // Directory. When the source lives only in castore (e.g. a subpath of nixpkgs in a
+            // store-backed eval, nothing materialized on the real fs), read it through the store
+            // rather than walking the filesystem: take the node directly if there's no filter, or
+            // apply the filter over the castore tree. Otherwise fall back to the walkdir ingest.
             FileType::Directory => {
                 // Store ops run on the tokio runtime, not the generator's executor — block_on,
                 // don't `.await` (like the NAR calc below).
-                let castore_node = if filter.is_none() {
-                    if let Ok((store_path, sub_path)) = parse_store_and_sub_path(&path) {
-                        state
-                            .tokio_handle
-                            .block_on(state.store_path_to_path_info(&store_path, sub_path))?
-                            .map(|pi| pi.node)
-                    } else {
-                        None
-                    }
+                let castore_root = if let Ok((store_path, sub_path)) = parse_store_and_sub_path(&path)
+                {
+                    state
+                        .tokio_handle
+                        .block_on(state.store_path_to_path_info(&store_path, sub_path))?
+                        .map(|pi| pi.node)
                 } else {
                     None
                 };
-                match castore_node {
-                    Some(node) => (node, None),
-                    None => (
+                match (castore_root, filter) {
+                    (Some(node), None) => (node, None),
+                    (Some(node), Some(filter)) => (
+                        super::castore_filtered_tree(state.clone(), &co, node, path.clone(), filter)
+                            .await?,
+                        None,
+                    ),
+                    (None, _) => (
                         filtered_ingest(state.clone(), co, path.as_ref(), filter).await?,
                         None,
                     ),
