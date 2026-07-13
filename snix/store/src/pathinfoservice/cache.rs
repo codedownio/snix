@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use futures::{TryStreamExt, stream::BoxStream};
+use futures::stream::BoxStream;
 use nix_compat::nixbase32;
 use snix_castore::composition::{CompositionContext, ServiceBuilder};
 use tonic::async_trait;
@@ -19,6 +19,7 @@ pub struct Cache<PS1, PS2> {
     instance_name: String,
     near: PS1,
     far: PS2,
+    write_far: bool,
 }
 
 impl<PS1, PS2> Cache<PS1, PS2> {
@@ -27,6 +28,7 @@ impl<PS1, PS2> Cache<PS1, PS2> {
             instance_name,
             near,
             far,
+            write_far: false,
         }
     }
 }
@@ -39,21 +41,28 @@ where
 {
     #[instrument(level = "trace", skip_all, fields(path_info.digest = nixbase32::encode(&digest), instance_name = %self.instance_name))]
     async fn get(&self, digest: [u8; 20]) -> Result<Option<PathInfo>, pathinfoservice::Error> {
-        match self.near.get(digest).await.map_err(Error::NearGet)? {
-            Some(path_info) => {
+        // A near failure is treated as a miss: far is the durable side.
+        match self.near.get(digest).await {
+            Ok(Some(path_info)) => {
                 debug!("serving from cache");
                 Ok(Some(path_info))
             }
-            None => {
-                debug!("not found in near, asking remote…");
-                match self.far.get(digest).await.map_err(Error::FarGet)? {
+            near_result => {
+                if let Err(e) = near_result {
+                    tracing::warn!(error = %e, "near get failed, asking far");
+                } else {
+                    debug!("not found in near, asking remote…");
+                }
+                let t_far = std::time::Instant::now();
+                let far_result = self.far.get(digest).await.map_err(Error::FarGet)?;
+                crate::perf_stats::SUBSTITUTE.record(t_far);
+                match far_result {
                     None => Ok(None),
                     Some(path_info) => {
                         debug!("found in remote, adding to cache");
-                        self.near
-                            .put(path_info.clone())
-                            .await
-                            .map_err(Error::NearPut)?;
+                        if let Err(e) = self.near.put(path_info.clone()).await {
+                            tracing::warn!(error = %e, "failed to populate near cache");
+                        }
                         Ok(Some(path_info))
                     }
                 }
@@ -64,16 +73,29 @@ where
     #[instrument(level = "trace", skip_all, fields(path_info.digest = nixbase32::encode(&digest), instance_name = %self.instance_name))]
     async fn has(&self, digest: [u8; 20]) -> Result<bool, pathinfoservice::Error> {
         // FUTUREWORK: queue background tasks if ! self.near.has && self.far.has ? (configurable)
-        Ok(self.near.has(digest).await.map_err(Error::NearGet)?
+        Ok(self.near.has(digest).await.unwrap_or(false)
             || self.far.has(digest).await.map_err(Error::FarGet)?)
     }
 
-    async fn put(&self, _path_info: PathInfo) -> Result<PathInfo, pathinfoservice::Error> {
-        Err(Error::Unimplemented)?
+    async fn put(&self, path_info: PathInfo) -> Result<PathInfo, pathinfoservice::Error> {
+        // Write through to near, so the cache can serve as the root store of a
+        // writable composition (e.g. local store fronted by a substituter).
+        // With `write_far`, far is the durable side; near is warmed so
+        // subsequent reads of what we just wrote are cache hits.
+        if self.write_far {
+            let path_info = self.far.put(path_info).await.map_err(Error::FarPut)?;
+            if let Err(e) = self.near.put(path_info.clone()).await {
+                tracing::warn!(error = %e, "failed to warm near cache on put");
+            }
+            Ok(path_info)
+        } else {
+            Ok(self.near.put(path_info).await.map_err(Error::NearPut)?)
+        }
     }
 
     fn list(&self) -> BoxStream<'static, Result<PathInfo, pathinfoservice::Error>> {
-        Box::pin(tokio_stream::once(Err(Error::Unimplemented)).err_into())
+        // Only list what's locally present; enumerating far would walk the substituter.
+        self.near.list()
     }
 }
 
@@ -82,6 +104,8 @@ where
 pub struct CacheConfig {
     pub near: String,
     pub far: String,
+    #[serde(default)]
+    pub write_far: bool,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -95,9 +119,8 @@ pub enum Error {
     NearPut(#[source] pathinfoservice::Error),
     #[error("getting from far: {0}")]
     FarGet(#[source] pathinfoservice::Error),
-
-    #[error("puts are unimplemented")]
-    Unimplemented,
+    #[error("putting into far: {0}")]
+    FarPut(#[source] pathinfoservice::Error),
 }
 
 impl TryFrom<url::Url> for CacheConfig {
@@ -123,6 +146,7 @@ impl ServiceBuilder for CacheConfig {
             instance_name: instance_name.to_string(),
             near: near?,
             far: far?,
+            write_far: self.write_far,
         }))
     }
 }

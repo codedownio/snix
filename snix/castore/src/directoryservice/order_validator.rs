@@ -216,6 +216,18 @@ impl LeavesToRootValidator {
         }
     }
 
+    /// Whether this digest has been accepted (streamed or registered external).
+    pub fn is_accepted(&self, digest: &B3Digest) -> bool {
+        self.accepted_directories.contains_key(digest)
+    }
+
+    /// Registers a directory known to exist outside the stream (e.g. in the backing store)
+    /// as accepted, so streamed parents may reference it without it being streamed. It is
+    /// not a root candidate.
+    pub fn accept_external(&mut self, digest: B3Digest, size: u64) {
+        self.accepted_directories.entry(digest).or_insert(size);
+    }
+
     /// Accepts a directory if previously introduced, or returns an error if it's unknown.
     pub fn try_accept(&mut self, directory: &Directory) -> Result<(), OrderingError> {
         assert!(!self.poison, "Snix bug: LeavesToRootValidator poisoned");
