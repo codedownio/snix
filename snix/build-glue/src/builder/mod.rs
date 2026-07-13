@@ -92,7 +92,7 @@ where
 /// to support the `BuildDerivation` daemon operation. And that operation sends a modified derivation
 /// where `input_derivations` have been converted to output store paths and moved to `input_sources`
 /// which can therefore not be verified.
-pub(crate) fn derivation_into_build_request<D: Into<UnverifiedDerivation>>(
+pub fn derivation_into_build_request<D: Into<UnverifiedDerivation>>(
     derivation: D,
     inputs: &BTreeMap<StorePath, Node>,
 ) -> std::io::Result<BuildRequest> {
