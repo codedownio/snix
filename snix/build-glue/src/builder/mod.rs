@@ -39,6 +39,21 @@ const NIX_ENVIRONMENT_VARS: [(&str, &str); 12] = [
     ("TMPDIR", "/build"),
 ];
 
+/// NIX_BUILD_CORES for builds: SNIX_BUILD_CORES env override, else host cores.
+pub(crate) fn nix_build_cores() -> &'static str {
+    static CORES: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CORES.get_or_init(|| {
+        std::env::var("SNIX_BUILD_CORES")
+            .ok()
+            .filter(|v| v.parse::<usize>().is_ok())
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map_or(1, |n| n.get())
+                    .to_string()
+            })
+    })
+}
+
 /// Get a stream of a transitive input closure for a derivation.
 /// It's used for input propagation into the build and nixbase32 needle propagation
 /// for build output refscanning.
@@ -51,7 +66,6 @@ where
     F: Fn(StorePath) -> Fut,
     Fut: Future<Output = std::io::Result<Option<PathInfo>>>,
 {
-    let mut visited: HashSet<StorePath> = HashSet::new();
     let mut queue: VecDeque<StorePath> = derivation
         .input_sources()
         .iter()
@@ -70,9 +84,27 @@ where
                 }),
         )
         .collect();
+    let mut visited: HashSet<StorePath> = queue.iter().cloned().collect();
+    // Resolve queued paths with bounded concurrency: each resolution may substitute a NAR or
+    // recursively build, so doing them one at a time serializes the whole closure on network
+    // round trips.
+    let concurrency: usize = std::env::var("SNIX_INPUT_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(16);
     try_stream! {
-        while let Some(store_path) = queue.pop_front() {
-                let info = get_path_info(store_path).await?.ok_or(std::io::Error::other("path_info not present"))?;
+        let mut in_flight = futures::stream::FuturesUnordered::new();
+        loop {
+            while in_flight.len() < concurrency {
+                match queue.pop_front() {
+                    Some(store_path) => in_flight.push(get_path_info(store_path)),
+                    None => break,
+                }
+            }
+            match futures::StreamExt::next(&mut in_flight).await {
+                None => break,
+                Some(info) => {
+                    let info = info?.ok_or(std::io::Error::other("path_info not present"))?;
                     for reference in info.references {
                         if visited.insert(reference.clone()) {
                             queue.push_back(reference);
@@ -80,8 +112,8 @@ where
                     }
 
                     yield (info.store_path, info.node);
-
-
+                }
+            }
         }
     }
 }
@@ -116,6 +148,13 @@ pub fn derivation_into_build_request<D: Into<UnverifiedDerivation>>(
         NIX_ENVIRONMENT_VARS
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_owned().into())),
+    );
+
+    // Give enableParallelBuilding builds the host cores (overridable); the const's 0 builds
+    // single-threaded under snix (unlike CppNix, whose 0 means "all cores").
+    environment_vars.insert(
+        "NIX_BUILD_CORES".into(),
+        nix_build_cores().as_bytes().to_vec(),
     );
 
     if let Some(json_str) = derivation.environment().get(structured_attrs::JSON_KEY) {
@@ -316,7 +355,7 @@ mod test {
         AdditionalFile, BuildConstraints, BuildRequest, EnvVar, Output,
     };
 
-    use crate::builder::NIX_ENVIRONMENT_VARS;
+    use crate::builder::{NIX_ENVIRONMENT_VARS, nix_build_cores};
     use crate::known_paths::KnownPaths;
 
     use super::derivation_into_build_request;
@@ -367,6 +406,7 @@ mod test {
         .expect("must succeed");
 
         let mut expected_environment_vars = BTreeMap::from_iter(NIX_ENVIRONMENT_VARS);
+        expected_environment_vars.insert("NIX_BUILD_CORES", nix_build_cores());
         expected_environment_vars.extend([
             ("bar", "/nix/store/mp57d33657rf34lzvlbpfa1gjfv5gmpg-bar"),
             ("builder", ":"),
@@ -417,6 +457,7 @@ mod test {
 
         let mut expected_environment_vars: BTreeMap<&str, String> =
             BTreeMap::from_iter(NIX_ENVIRONMENT_VARS.map(|(k, v)| (k, v.to_owned())));
+        expected_environment_vars.insert("NIX_BUILD_CORES", nix_build_cores().to_owned());
 
         expected_environment_vars.extend([
             (
@@ -481,6 +522,7 @@ mod test {
         let derivation = UnverifiedDerivation::from_aterm_bytes(aterm_bytes).expect("must parse");
 
         let mut expected_environment_vars = BTreeMap::from_iter(NIX_ENVIRONMENT_VARS);
+        expected_environment_vars.insert("NIX_BUILD_CORES", nix_build_cores());
         expected_environment_vars.extend([
             ("builder", ":"),
             ("name", "bar"),
@@ -533,6 +575,7 @@ mod test {
         let derivation = UnverifiedDerivation::from_aterm_bytes(aterm_bytes).expect("must parse");
 
         let mut expected_environment_vars = BTreeMap::from_iter(NIX_ENVIRONMENT_VARS);
+        expected_environment_vars.insert("NIX_BUILD_CORES", nix_build_cores());
         expected_environment_vars.extend([
             // Note how bar and baz are not present in the env anymore,
             // but replaced with barPath, bazPath respectively.
@@ -600,6 +643,7 @@ mod test {
         let derivation = UnverifiedDerivation::from_aterm_bytes(aterm_bytes).expect("must parse");
 
         let mut expected_environment_vars = BTreeMap::from_iter(NIX_ENVIRONMENT_VARS);
+        expected_environment_vars.insert("NIX_BUILD_CORES", nix_build_cores());
         expected_environment_vars.extend([
             ("NIX_ATTRS_JSON_FILE", "/build/.attrs.json"),
             ("NIX_ATTRS_SH_FILE", "/build/.attrs.sh"),

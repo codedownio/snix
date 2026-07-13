@@ -96,13 +96,17 @@ impl BuildState {
         // produced that would build it, fall back to triggering the build.
         // To populate the input nodes, it might recursively trigger builds of
         // its dependencies too.
-        let mut path_info = if let Some(path_info) = self
+        let t_pi = std::time::Instant::now();
+        let io_pi = snix_store::perf_stats::IO_WALL.enter();
+        let looked_up = self
             .path_info_service
             .as_ref()
             .get(*store_path.digest())
             .await
-            .map_err(std::io::Error::other)?
-        {
+            .map_err(std::io::Error::other)?;
+        snix_store::perf_stats::PATHINFO_GET.record(t_pi);
+        drop(io_pi);
+        let mut path_info = if let Some(path_info) = looked_up {
             path_info
         } else {
             // If there's no PathInfo found, this normally means we have to
@@ -125,11 +129,15 @@ impl BuildState {
                 .read()
                 .get_fetch_for_output_path(store_path);
             if let Some((name, fetch)) = maybe_fetch {
+                let t_fetch = std::time::Instant::now();
+                let io_fetch = snix_store::perf_stats::IO_WALL.enter();
                 let (sp, path_info) = self
                     .fetcher
                     .ingest_and_persist(&name, fetch)
                     .await
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                snix_store::perf_stats::FETCH.record(t_fetch);
+                drop(io_fetch);
 
                 debug_assert_eq!(
                     sp.to_absolute_path(),
@@ -219,6 +227,18 @@ impl BuildState {
                     references: Vec<StorePath>,
                 }
 
+                // When driven by nox (NOX_SNIX_BUILD_LOG set), print per-derivation
+                // sentinel lines the nox builder parses into build-progress activities.
+                let nox_build_log = std::env::var_os("NOX_SNIX_BUILD_LOG").is_some();
+                if nox_build_log {
+                    eprintln!("NOX_BUILD_START /nix/store/{drv_path}");
+                }
+
+                let t_build = std::time::Instant::now();
+                let io_build = snix_store::perf_stats::IO_WALL.enter();
+                // Tail of the build transcript, carried in the error on failure: callers
+                // without a tracing subscriber otherwise only see "nonzero exit".
+                let mut transcript_tail = TranscriptTail::default();
                 let produced_outputs: Vec<ProducedOutput> = {
                     let mut produced_outputs: Vec<ProducedOutput> =
                         Vec::with_capacity(output_paths.len());
@@ -271,11 +291,13 @@ impl BuildState {
                                     },
                                 })
                             }
-                            BuildUpdate::ProducedStdout(_) | BuildUpdate::ProducedStderr(_) => {
-                                // no output printed for now
-                            }
+                            BuildUpdate::ProducedStdout(chunk) => transcript_tail.push(&chunk),
+                            BuildUpdate::ProducedStderr(chunk) => transcript_tail.push(&chunk),
                             BuildUpdate::BuildFailure(build_failure) => {
-                                Err(std::io::Error::other(build_failure))?
+                                warn!(%build_failure, transcript_tail = %transcript_tail, "build failed");
+                                Err(std::io::Error::other(format!(
+                                    "{build_failure}; transcript tail: {transcript_tail}"
+                                )))?
                             }
                         }
                     }
@@ -287,6 +309,14 @@ impl BuildState {
 
                     produced_outputs
                 };
+                snix_store::perf_stats::BUILD.record(t_build);
+                drop(io_build);
+                if nox_build_log {
+                    eprintln!(
+                        "NOX_BUILD_DONE /nix/store/{drv_path} {:.1}",
+                        t_build.elapsed().as_secs_f64()
+                    );
+                }
                 // FUTUREWORK: more validation?
 
                 let mut out_path_info: Option<PathInfo> = None;
@@ -300,11 +330,15 @@ impl BuildState {
                 } in produced_outputs
                 {
                     // calculate the nar representation
+                    let t_nar = std::time::Instant::now();
+                    let io_nar = snix_store::perf_stats::IO_WALL.enter();
                     let (nar_size, nar_sha256) = self
                         .nar_calculation_service
                         .calculate_nar(&node)
                         .await
                         .map_err(std::io::Error::other)?;
+                    snix_store::perf_stats::NAR_CALC.record(t_nar);
+                    drop(io_nar);
 
                     // assemble the PathInfo to persist
                     let path_info = PathInfo {
@@ -340,14 +374,39 @@ impl BuildState {
         };
 
         // now with the root_node and sub_path, descend to the node requested.
-        Ok(
-            descend_to(&self.directory_service, path_info.node.clone(), sub_path)
-                .await
-                .map_err(std::io::Error::other)?
-                .map(|node| {
-                    path_info.node = node;
-                    path_info
-                }),
-        )
+        let t_descend = std::time::Instant::now();
+        let io_descend = snix_store::perf_stats::IO_WALL.enter();
+        let node = descend_to(&self.directory_service, path_info.node.clone(), sub_path)
+            .await
+            .map_err(std::io::Error::other)?;
+        snix_store::perf_stats::DESCEND.record(t_descend);
+        drop(io_descend);
+        Ok(node.map(|node| {
+            path_info.node = node;
+            path_info
+        }))
+    }
+}
+
+/// Keeps the last few KiB of a build's stdout/stderr, for error messages.
+#[derive(Default)]
+struct TranscriptTail(std::collections::VecDeque<u8>);
+
+impl TranscriptTail {
+    const CAPACITY: usize = 4096;
+
+    fn push(&mut self, chunk: &[u8]) {
+        self.0.extend(chunk.iter().copied());
+        while self.0.len() > Self::CAPACITY {
+            self.0.pop_front();
+        }
+    }
+}
+
+impl std::fmt::Display for TranscriptTail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (a, b) = self.0.as_slices();
+        f.write_str(&String::from_utf8_lossy(a))?;
+        f.write_str(&String::from_utf8_lossy(b))
     }
 }

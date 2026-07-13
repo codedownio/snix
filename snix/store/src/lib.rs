@@ -7,7 +7,9 @@ pub mod import;
 pub mod nar;
 pub mod path_info;
 pub mod pathinfoservice;
+pub mod perf_stats;
 pub mod proto;
+pub mod timing_blob;
 pub mod utils;
 
 // Used as user agent in various HTTP Clients

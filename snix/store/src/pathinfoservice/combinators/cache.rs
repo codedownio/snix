@@ -51,7 +51,10 @@ where
                 } else {
                     debug!("not found in near, asking remote…");
                 }
-                match self.far.get(digest).await.map_err(Error::FarGet)? {
+                let t_far = std::time::Instant::now();
+                let far_result = self.far.get(digest).await.map_err(Error::FarGet)?;
+                crate::perf_stats::SUBSTITUTE.record(t_far);
+                match far_result {
                     None => Ok(None),
                     Some(path_info) => {
                         debug!("found in remote, adding to cache");

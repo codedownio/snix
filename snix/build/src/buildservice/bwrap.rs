@@ -43,6 +43,7 @@ impl<BS, DS> BubblewrapBuildService<BS, DS> {
         directory_service: DS,
         external_store: Option<PathBuf>,
         userns: bool,
+        concurrency: usize,
     ) -> Self {
         // We map root inside the container to the uid/gid this is running at,
         // and allocate one for uid 1000 into the container from the range we
@@ -54,7 +55,7 @@ impl<BS, DS> BubblewrapBuildService<BS, DS> {
             directory_service,
             external_store,
             userns,
-            concurrent_builds: tokio::sync::Semaphore::new(2),
+            concurrent_builds: tokio::sync::Semaphore::new(concurrency),
         }
     }
 }
@@ -93,26 +94,29 @@ where
             // binds it) instead of a per-build castore FUSE.
             .external_inputs(self.external_store.clone())
             .external_input_names(external_input_names)
-            .with_inputs(request.inputs_dir, move |path| -> std::io::Result<Box<dyn crate::sandbox::InputsGuard>> {
-                if external {
-                    // Inputs are served by the external mount (bound by bwrap); no FUSE to mount.
-                    return Ok(Box::new(()));
-                }
-                let root_nodes = Box::new(request.inputs.clone());
-                let fs = snix_castore::fs::SnixStoreFs::new(
-                    blob_engine.clone(),
-                    directory_service.clone(),
-                    root_nodes,
-                    snix_castore::fs::FSSettings {
-                        list_root: true,
-                        uid_gid_override: None,
-                        show_xattr: false,
-                    },
-                    tokio::runtime::Handle::current(),
-                );
-                // FUTUREWORK: make fuse daemon threads configurable?
-                Ok(Box::new(FuseDaemon::new(fs, path, 4, false)?))
-            })
+            .with_inputs(
+                request.inputs_dir,
+                move |path| -> std::io::Result<Box<dyn crate::sandbox::InputsGuard>> {
+                    if external {
+                        // Inputs are served by the external mount (bound by bwrap); no FUSE to mount.
+                        return Ok(Box::new(()));
+                    }
+                    let root_nodes = Box::new(request.inputs.clone());
+                    let fs = snix_castore::fs::SnixStoreFs::new(
+                        blob_engine.clone(),
+                        directory_service.clone(),
+                        root_nodes,
+                        snix_castore::fs::FSSettings {
+                            list_root: true,
+                            uid_gid_override: None,
+                            show_xattr: false,
+                        },
+                        tokio::runtime::Handle::current(),
+                    );
+                    // FUTUREWORK: make fuse daemon threads configurable?
+                    Ok(Box::new(FuseDaemon::new(fs, path, 4, false)?))
+                },
+            )
             .allow_network(
                 request
                     .constraints

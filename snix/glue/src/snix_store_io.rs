@@ -32,11 +32,19 @@ use snix_store::pathinfoservice::{PathInfo, PathInfoService};
 /// hide this implementation detail of the glue itself so that glue can be used with more than one
 /// implementation of "Snix Store IO" which does not necessarily bring the concept of blob service,
 /// directory service or path info service.
+/// Memoized positive (store path digest, sub path) -> PathInfo lookups (see `lookup_cache`).
+type LookupCache = std::collections::HashMap<([u8; 20], Vec<u8>), PathInfo>;
+
 pub struct SnixStoreIO {
     pub build_state: BuildState,
 
     std_io: StdIO,
     pub(crate) tokio_handle: tokio::runtime::Handle,
+
+    /// Memoizes positive (store_path, sub_path) lookups: store paths are immutable within
+    /// one evaluation, and the eval surface re-resolves the same paths tens of thousands of
+    /// times (each one a pathinfo get plus a directory walk).
+    lookup_cache: std::cell::RefCell<LookupCache>,
 }
 
 impl SnixStoreIO {
@@ -60,6 +68,7 @@ impl SnixStoreIO {
             ),
             std_io: StdIO {},
             tokio_handle,
+            lookup_cache: Default::default(),
         }
     }
 
@@ -87,9 +96,20 @@ impl SnixStoreIO {
         store_path: &StorePathRef<'_>,
         sub_path: &snix_castore::Path,
     ) -> io::Result<Option<PathInfo>> {
-        self.build_state
+        let key = (*store_path.digest(), sub_path.as_ref().as_bytes().to_vec());
+        if let Some(path_info) = self.lookup_cache.borrow().get(&key) {
+            return Ok(Some(path_info.clone()));
+        }
+        let resolved = self
+            .build_state
             .store_path_to_path_info(store_path, sub_path)
-            .await
+            .await?;
+        if let Some(path_info) = &resolved {
+            self.lookup_cache
+                .borrow_mut()
+                .insert(key, path_info.clone());
+        }
+        Ok(resolved)
     }
 
     /// Re-key an already-in-castore [Node] as a recursive NAR-content-addressed store path and
@@ -191,13 +211,17 @@ impl EvalIO for SnixStoreIO {
                             ))
                         }
                         Node::File { digest, size, .. } => {
-                            if let Some(blob_reader) = self
+                            let t_blob = std::time::Instant::now();
+                            let io_blob = snix_store::perf_stats::IO_WALL.enter();
+                            let resp = self
                                 .build_state
                                 .blob_engine
                                 .open_read(&digest, Some(size))
                                 .await
-                                .map_err(std::io::Error::other)?
-                            {
+                                .map_err(std::io::Error::other)?;
+                            snix_store::perf_stats::BLOB_READ.record(t_blob);
+                            drop(io_blob);
+                            if let Some(blob_reader) = resp {
                                 Ok(Box::new(SyncIoBridge::new(blob_reader)) as Box<dyn io::Read>)
                             } else {
                                 error!(
@@ -252,6 +276,8 @@ impl EvalIO for SnixStoreIO {
                     match path_info.node {
                         Node::Directory { digest, .. } => {
                             // fetch the Directory itself.
+                            let t_dir = std::time::Instant::now();
+                            let io_dir = snix_store::perf_stats::IO_WALL.enter();
                             let directory = self
                                 .build_state
                                 .directory_service
@@ -271,6 +297,8 @@ impl EvalIO for SnixStoreIO {
                                         format!("directory {digest} does not exist"),
                                     )
                                 })?;
+                            snix_store::perf_stats::DIR_GET.record(t_dir);
+                            drop(io_dir);
 
                             // construct children from nodes
                             Ok(directory
