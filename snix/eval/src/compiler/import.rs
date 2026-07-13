@@ -27,7 +27,14 @@ async fn import_impl(
     // TODO(sterni): canon_path()?
     let mut path = try_cek_to_value!(coerce_value_to_path(&co, args.pop().unwrap()).await?);
 
-    if path.is_dir() {
+    // Ask the EvalIO layer whether this is a directory, rather than std::fs — the path may live
+    // in a virtual store (castore, a remote store) with nothing materialized on the real
+    // filesystem, in which case `Path::is_dir()` wrongly returns false and we'd try to `open()`
+    // the directory itself instead of its `default.nix`.
+    if matches!(
+        generators::request_read_file_type(&co, path.clone()).await,
+        crate::io::FileType::Directory
+    ) {
         path.push("default.nix");
     }
 
@@ -55,7 +62,12 @@ async fn import_impl(
 
     let result = crate::compiler::compile(
         &parsed.tree().expr().unwrap(),
-        Some(path.clone()),
+        // Relative paths in the imported file resolve against its DIRECTORY. Pass the parent
+        // explicitly (pure path manipulation) rather than the file path: Compiler::new would
+        // otherwise strip the filename with a `Path::is_file()` filesystem stat, which returns
+        // false for a file that lives only in a virtual store (castore, a remote store), leaving
+        // relative imports to resolve against `<file>/…` instead of `<dir>/…`.
+        path.parent().map(|p| p.to_path_buf()),
         // The VM must ensure that a strong reference to the globals outlives
         // any self-references (which are weak) embedded within the globals. If
         // the expect() below panics, it means that did not happen.
