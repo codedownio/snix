@@ -34,6 +34,9 @@ pub struct BubblewrapBuildService<BS, DS> {
     /// request's inputs. When set, the sandbox reads inputs through this mount (and its cache).
     external_store: Option<PathBuf>,
 
+    /// Whether the sandbox unshares a user namespace (see [SandboxSpec::userns]).
+    userns: bool,
+
     // semaphore to track number of concurrently running builds.
     // this is necessary, as otherwise we very quickly run out of open file handles.
     concurrent_builds: tokio::sync::Semaphore,
@@ -44,6 +47,7 @@ impl<BS, DS> BubblewrapBuildService<BS, DS> {
         blob_service: BS,
         directory_service: DS,
         external_store: Option<PathBuf>,
+        userns: bool,
     ) -> Self {
         // We map root inside the container to the uid/gid this is running at,
         // and allocate one for uid 1000 into the container from the range we
@@ -54,6 +58,7 @@ impl<BS, DS> BubblewrapBuildService<BS, DS> {
             blob_service,
             directory_service,
             external_store,
+            userns,
             concurrent_builds: tokio::sync::Semaphore::new(2),
         }
     }
@@ -94,7 +99,7 @@ where
         };
 
         let spec = SandboxSpec::builder()
-            .host_workdir(sandbox_path)
+            .host_workdir(sandbox_path.clone())
             .sandbox_workdir(request.working_dir)
             .scratches(request.scratch_paths)
             .command(request.command_args)
@@ -129,6 +134,7 @@ where
                     .constraints
                     .contains(&BuildConstraints::NetworkAccess),
             )
+            .userns(self.userns)
             .provide_shell(
                 request
                     .constraints
@@ -139,13 +145,32 @@ where
 
         let outcome = Bwrap::initialize(spec)?.run().await?;
 
+        // Always persist the sandbox transcript, success or failure — a 0-exit build can still be
+        // silently wrong (e.g. stdenv phases no-op'ing), and this is the only record of what ran.
+        let stdout_log = sandbox_path.join("build-stdout.log");
+        let stderr_log = sandbox_path.join("build-stderr.log");
+        let _ = std::fs::write(&stdout_log, &outcome.output().stdout);
+        let _ = std::fs::write(&stderr_log, &outcome.output().stderr);
+        info!(stdout_log=%stdout_log.display(), stderr_log=%stderr_log.display(), exit_code=%outcome.output().status, "build finished");
+
         if !outcome.output().status.success() {
             let stdout = BStr::new(&outcome.output().stdout);
             let stderr = BStr::new(&outcome.output().stderr);
 
             warn!(stdout=%stdout, stderr=%stderr, exit_code=%outcome.output().status, "build failed");
 
-            return Err(std::io::Error::other("nonzero exit code".to_string()));
+            // Carry the tail of the transcript in the error itself: callers without a tracing
+            // subscriber (or reading a driver's stderr remotely) otherwise see only "nonzero exit".
+            let tail = |b: &[u8]| -> String {
+                let start = b.len().saturating_sub(2048);
+                String::from_utf8_lossy(&b[start..]).into_owned()
+            };
+            return Err(std::io::Error::other(format!(
+                "nonzero exit code ({}); stdout tail: {}; stderr tail: {}",
+                outcome.output().status,
+                tail(&outcome.output().stdout),
+                tail(&outcome.output().stderr),
+            )));
         }
 
         let outputs: Vec<_> = request
