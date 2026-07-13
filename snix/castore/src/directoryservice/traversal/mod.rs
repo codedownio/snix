@@ -8,7 +8,7 @@ use crate::B3Digest;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("unable to lookup directory {0}")]
+    #[error("unable to lookup directory {0}: {1}")]
     GetFailure(B3Digest, #[source] crate::directoryservice::Error),
     #[error("referenced directory {0} not found")]
     NotFound(B3Digest),

@@ -4,13 +4,13 @@ use futures::StreamExt;
 use futures::TryStreamExt;
 use futures::stream::BoxStream;
 use tonic::async_trait;
-use tracing::{instrument, trace};
+use tracing::{instrument, trace, warn};
 
 use crate::composition::{CompositionContext, ServiceBuilder};
 use crate::directoryservice::DirectoryServiceGraphExt;
 use crate::directoryservice::directory_graph::DirectoryGraphBuilder;
 use crate::directoryservice::order_validator::RootToLeaves;
-use crate::directoryservice::{self, DirectoryPutter, DirectoryService, SimplePutter};
+use crate::directoryservice::{self, DirectoryPutter, DirectoryService};
 use crate::{B3Digest, Directory};
 
 /// Asks near first, if not found, asks far.
@@ -44,10 +44,16 @@ where
 {
     #[instrument(skip(self, digest), fields(directory.digest = %digest, instance_name = %self.instance_name))]
     async fn get(&self, digest: &B3Digest) -> Result<Option<Directory>, directoryservice::Error> {
-        // check near
-        if let Some(directory) = self.near.get(digest).await.map_err(Error::NearGet)? {
-            trace!("serving from cache");
-            return Ok(Some(directory));
+        // check near; a near failure shouldn't fail the read when far has the data.
+        match self.near.get(digest).await {
+            Ok(Some(directory)) => {
+                trace!("serving from cache");
+                return Ok(Some(directory));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "near get failed, asking far");
+            }
         }
 
         trace!("not found in near, asking remote…");
@@ -61,22 +67,18 @@ where
             .await
             .map_err(Error::FarGet)?;
 
-        // If far had the directory, put into near.
+        // If far had the directory, put into near (best-effort: a broken near cache must
+        // not fail a read the far side answered).
         if let Some(directory_graph) = directory_graph {
             let root = directory_graph.root().to_owned();
 
             // Drain into near
-            let digest_near = self
-                .near
-                .put_directory_graph(directory_graph)
-                .await
-                .map_err(Error::NearPut)?;
-
-            if digest_near != *digest {
-                Err(Error::InsertingGraphMismatch {
-                    digest_expected: *digest,
-                    digest_actual: digest_near,
-                })?;
+            match self.near.put_directory_graph(directory_graph).await {
+                Ok(digest_near) if digest_near != *digest => {
+                    warn!(%digest_near, "populating near cache returned a different digest");
+                }
+                Ok(_) => {}
+                Err(e) => warn!(error = %e, "failed to populate near cache"),
             }
 
             Ok(Some(root))
@@ -89,7 +91,11 @@ where
     async fn put(&self, directory: Directory) -> Result<B3Digest, directoryservice::Error> {
         // Write through to far (the durable side); also warm near so subsequent
         // reads of what we just wrote are cache hits.
-        let digest = self.far.put(directory.clone()).await.map_err(Error::FarPut)?;
+        let digest = self
+            .far
+            .put(directory.clone())
+            .await
+            .map_err(Error::FarPut)?;
         if let Err(e) = self.near.put(directory).await {
             trace!(error = %e, "failed to warm near cache on put");
         }
@@ -106,9 +112,14 @@ where
         let digest = *root_directory_digest;
 
         async_stream::try_stream! {
+            // Try near first, but treat near errors as misses (far is the durable side).
+            let mut near_first = None;
             let mut directories = near.get_recursive(&digest);
-
-            if let Some(first) = directories.try_next().await.map_err(Error::NearGet)? {
+            match directories.try_next().await {
+                Ok(first) => near_first = first,
+                Err(e) => tracing::warn!(error = %e, "near get_recursive failed, asking far"),
+            }
+            if let Some(first) = near_first {
                 trace!("serving from cache");
                 yield first;
 
@@ -117,6 +128,7 @@ where
                 }
                 return;
             }
+            drop(directories);
 
             trace!("not found in 'near', asking 'far'");
 
@@ -150,7 +162,49 @@ where
 
     #[instrument(skip_all)]
     fn put_multiple_start(&self) -> Box<dyn DirectoryPutter + '_> {
-        Box::new(SimplePutter::new(self))
+        // Stream to far in one putter (far may validate closure connectivity per stream, e.g.
+        // grpc), warming near along the way.
+        Box::new(TeePutter {
+            far: self.far.put_multiple_start(),
+            near: self.near.put_multiple_start(),
+            near_dead: false,
+        })
+    }
+}
+
+/// Feeds a directory stream to both sides of a [Cache]: far is the durable side (its close
+/// digest is returned), near is warmed best-effort — on a near error, mirroring stops (a
+/// half-written near subtree is only ever a cache miss, never served as a partial tree).
+struct TeePutter<'a> {
+    far: Box<dyn DirectoryPutter + 'a>,
+    near: Box<dyn DirectoryPutter + 'a>,
+    near_dead: bool,
+}
+
+#[async_trait]
+impl DirectoryPutter for TeePutter<'_> {
+    async fn put(&mut self, directory: Directory) -> Result<(), directoryservice::Error> {
+        self.far
+            .put(directory.clone())
+            .await
+            .map_err(Error::FarPut)?;
+        if !self.near_dead
+            && let Err(e) = self.near.put(directory).await
+        {
+            tracing::warn!(error = %e, "near put failed, no longer warming near");
+            self.near_dead = true;
+        }
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<B3Digest, directoryservice::Error> {
+        let digest = self.far.close().await.map_err(Error::FarPut)?;
+        if !self.near_dead
+            && let Err(e) = self.near.close().await
+        {
+            tracing::warn!(error = %e, "near close failed");
+        }
+        Ok(digest)
     }
 }
 

@@ -249,6 +249,23 @@ pub struct LeavesToRoot {
 }
 
 impl LeavesToRoot {
+    /// Whether this digest has been accepted (streamed or registered external).
+    pub fn is_accepted(&self, digest: &B3Digest) -> bool {
+        self.accepted_directories.contains_key(digest)
+    }
+
+    /// Registers a directory known to exist outside the stream (e.g. in the backing store)
+    /// as accepted, so streamed parents may reference it without it being streamed. It is
+    /// not a root candidate.
+    pub fn accept_external(&mut self, digest: B3Digest, size: u64) {
+        #[cfg(feature = "compat-accept-bigger-sizes")]
+        self.accepted_directories
+            .entry(digest)
+            .or_insert(size..=size);
+        #[cfg(not(feature = "compat-accept-bigger-sizes"))]
+        self.accepted_directories.entry(digest).or_insert(size);
+    }
+
     pub fn new() -> Self {
         Self {
             accepted_directories: Default::default(),

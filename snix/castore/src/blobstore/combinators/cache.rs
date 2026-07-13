@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tonic::async_trait;
-use tracing::{instrument, trace};
+use tracing::{instrument, trace, warn};
 
 use crate::{
     B3Digest,
@@ -13,10 +13,15 @@ use crate::{
 /// If found in there, returns it, and *inserts* it into
 /// near.
 /// There is no negative cache.
+///
+/// Near failures are treated as misses: far is the durable side. By default
+/// writes go to near only; with `write_far`, writes go to far (and near is
+/// warmed best-effort), so the cache can front a durable remote store.
 pub struct Cache<CN, CF> {
     instance_name: String,
     near: CN,
     far: CF,
+    write_far: bool,
 }
 
 impl<BN, BF> Cache<BN, BF> {
@@ -26,6 +31,17 @@ impl<BN, BF> Cache<BN, BF> {
             instance_name,
             near,
             far,
+            write_far: false,
+        }
+    }
+
+    /// Like [Cache::new], but writes go to `far`, warming `near` best-effort.
+    pub fn new_write_far(instance_name: String, near: BN, far: BF) -> Self {
+        Self {
+            instance_name,
+            near,
+            far,
+            write_far: true,
         }
     }
 }
@@ -38,9 +54,14 @@ where
 {
     #[instrument(skip(self, digest), fields(blob.digest=%digest, instance_name=%self.instance_name))]
     async fn get(&self, digest: &B3Digest) -> Result<Option<BlobMeta>, blobstore::Error> {
-        if let Some(blob) = self.near.get(digest).await.map_err(Error::NearGet)? {
-            trace!("serving from cache");
-            return Ok(Some(blob));
+        // check near; a near failure shouldn't fail the read when far has the data.
+        match self.near.get(digest).await {
+            Ok(Some(blob)) => {
+                trace!("serving from cache");
+                return Ok(Some(blob));
+            }
+            Ok(None) => {}
+            Err(e) => warn!(error = %e, "near get failed, asking far"),
         }
 
         trace!("not found in near, asking remote…");
@@ -49,11 +70,11 @@ where
             // blob_meta doesn't exist on the far side either, nothing we can do.
             None => Ok(None),
             Some(blob_meta) => {
-                // blob_meta is present on the far side, insert it into near before returning.
-                self.near
-                    .put(digest, blob_meta.clone())
-                    .await
-                    .map_err(Error::NearPut)?;
+                // blob_meta is present on the far side, insert it into near before returning
+                // (best-effort: a broken near cache must not fail a read far answered).
+                if let Err(e) = self.near.put(digest, blob_meta.clone()).await {
+                    warn!(error = %e, "failed to populate near cache");
+                }
 
                 Ok(Some(blob_meta))
             }
@@ -62,18 +83,32 @@ where
 
     #[instrument(skip_all, fields(Blob.digest=%digest, instance_name=%self.instance_name))]
     async fn has(&self, digest: &B3Digest) -> Result<bool, blobstore::Error> {
-        Ok(self.near.has(digest).await.map_err(Error::NearGet)?
+        // Near failures are misses: far is the durable side.
+        Ok(self.near.has(digest).await.unwrap_or(false)
             || self.far.has(digest).await.map_err(Error::FarGet)?)
     }
 
     /// Persists a [BlobMeta] for the given blob digest.
     #[instrument(skip_all, fields(instance_name=%self.instance_name))]
     async fn put(&self, digest: &B3Digest, blob_meta: BlobMeta) -> Result<(), blobstore::Error> {
-        Ok(self
-            .near
-            .put(digest, blob_meta)
-            .await
-            .map_err(Error::NearPut)?)
+        if self.write_far {
+            // far is the durable side; warm near so what was just written (and is usually
+            // read back right after) is a cache hit.
+            self.far
+                .put(digest, blob_meta.clone())
+                .await
+                .map_err(Error::FarPut)?;
+            if let Err(e) = self.near.put(digest, blob_meta).await {
+                warn!(error = %e, "failed to warm near cache on put");
+            }
+            Ok(())
+        } else {
+            Ok(self
+                .near
+                .put(digest, blob_meta)
+                .await
+                .map_err(Error::NearPut)?)
+        }
     }
 }
 
@@ -89,6 +124,8 @@ pub enum Error {
     NearPut(#[source] blobstore::Error),
     #[error("getting from far: {0}")]
     FarGet(#[source] blobstore::Error),
+    #[error("putting into far: {0}")]
+    FarPut(#[source] blobstore::Error),
 }
 
 impl From<Error> for blobstore::Error {
@@ -103,6 +140,8 @@ impl From<Error> for blobstore::Error {
 pub struct CacheConfig {
     near: String,
     far: String,
+    #[serde(default)]
+    write_far: bool,
 }
 
 impl TryFrom<url::Url> for CacheConfig {
@@ -132,6 +171,7 @@ impl ServiceBuilder for CacheConfig {
             instance_name: instance_name.to_string(),
             near: near?,
             far: far?,
+            write_far: self.write_far,
         }))
     }
 }
@@ -238,5 +278,21 @@ mod test {
 
         assert!(near.has(&CHUNK.digest()).await.expect("to succeed"));
         assert!(!far.has(&CHUNK.digest()).await.expect("to succeed"));
+    }
+
+    /// With write_far, put() writes to far and warms near.
+    #[tokio::test]
+    async fn put_write_far_writes_both() {
+        let near = MemoryBlobStore::default();
+        let far = MemoryBlobStore::default();
+
+        let uut = Cache::new_write_far("uut".to_string(), near.clone(), far.clone());
+
+        uut.put(&CHUNK.digest(), BLOB_META.clone())
+            .await
+            .expect("to succeed");
+
+        assert!(near.has(&CHUNK.digest()).await.expect("to succeed"));
+        assert!(far.has(&CHUNK.digest()).await.expect("to succeed"));
     }
 }
