@@ -86,8 +86,14 @@ where
     }
 
     #[instrument(skip_all, fields(instance_name = %self.instance_name))]
-    async fn put(&self, _directory: Directory) -> Result<B3Digest, directoryservice::Error> {
-        Err(Error::Unimplemented.into())
+    async fn put(&self, directory: Directory) -> Result<B3Digest, directoryservice::Error> {
+        // Write through to far (the durable side); also warm near so subsequent
+        // reads of what we just wrote are cache hits.
+        let digest = self.far.put(directory.clone()).await.map_err(Error::FarPut)?;
+        if let Err(e) = self.near.put(directory).await {
+            trace!(error = %e, "failed to warm near cache on put");
+        }
+        Ok(digest)
     }
 
     #[instrument(skip_all, fields(directory.digest = %root_directory_digest, instance_name = %self.instance_name))]
@@ -168,6 +174,8 @@ pub enum Error {
         digest_expected: B3Digest,
         digest_actual: B3Digest,
     },
+    #[error("putting into far: {0}")]
+    FarPut(#[source] directoryservice::Error),
 
     #[error("puts are unimplemented")]
     Unimplemented,

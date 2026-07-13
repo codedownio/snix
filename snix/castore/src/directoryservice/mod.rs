@@ -10,6 +10,7 @@ mod directory_graph;
 mod failing_putter;
 mod from_addr;
 mod grpc;
+mod memory;
 mod object_store;
 pub mod order_validator;
 mod redb;
@@ -26,6 +27,7 @@ pub use self::grpc::{
     GRPCDirectoryService, GRPCDirectoryServiceConfig,
     MAX_DECODING_MESSAGE_SIZE as GRPC_MAX_DECODING_MESSAGE_SIZE,
 };
+pub use self::memory::{MemoryDirectoryService, MemoryDirectoryServiceConfig};
 pub use self::object_store::{ObjectStoreDirectoryService, ObjectStoreDirectoryServiceConfig};
 pub use self::redb::{RedbDirectoryService, RedbDirectoryServiceConfig};
 pub use self::simple_putter::SimplePutter;
@@ -125,6 +127,7 @@ pub(crate) fn register_directory_services(reg: &mut Registry) {
     reg.register::<Box<dyn ServiceBuilder<Output = dyn DirectoryService>>, super::directoryservice::GRPCDirectoryServiceConfig>("grpc");
     reg.register::<Box<dyn ServiceBuilder<Output = dyn DirectoryService>>, super::directoryservice::ObjectStoreDirectoryServiceConfig>("objectstore");
     reg.register::<Box<dyn ServiceBuilder<Output = dyn DirectoryService>>, super::directoryservice::RedbDirectoryServiceConfig>("redb");
+    reg.register::<Box<dyn ServiceBuilder<Output = dyn DirectoryService>>, super::directoryservice::MemoryDirectoryServiceConfig>("memory");
     #[cfg(feature = "cloud")]
     {
         reg.register::<Box<dyn ServiceBuilder<Output = dyn DirectoryService>>, super::directoryservice::BigtableParameters>("bigtable");
