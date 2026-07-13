@@ -29,12 +29,22 @@ pub struct BubblewrapBuildService<BS, DS> {
     /// Handle to a [DirectoryService], used by filesystems spawned during builds.
     directory_service: DS,
 
+    /// Optional: an already-mounted whole-store directory to bind as the build's read-only inputs
+    /// (e.g. a cached nox-mount FUSE) instead of spinning up a per-build castore FUSE from the
+    /// request's inputs. When set, the sandbox reads inputs through this mount (and its cache).
+    external_store: Option<PathBuf>,
+
     // semaphore to track number of concurrently running builds.
     // this is necessary, as otherwise we very quickly run out of open file handles.
     concurrent_builds: tokio::sync::Semaphore,
 }
 impl<BS, DS> BubblewrapBuildService<BS, DS> {
-    pub fn new(workdir: PathBuf, blob_service: BS, directory_service: DS) -> Self {
+    pub fn new(
+        workdir: PathBuf,
+        blob_service: BS,
+        directory_service: DS,
+        external_store: Option<PathBuf>,
+    ) -> Self {
         // We map root inside the container to the uid/gid this is running at,
         // and allocate one for uid 1000 into the container from the range we
         // got in /etc/sub{u,g}id.
@@ -43,6 +53,7 @@ impl<BS, DS> BubblewrapBuildService<BS, DS> {
             workdir,
             blob_service,
             directory_service,
+            external_store,
             concurrent_builds: tokio::sync::Semaphore::new(2),
         }
     }
@@ -67,6 +78,20 @@ where
 
         let blob_service = self.blob_service.clone();
         let directory_service = self.directory_service.clone();
+        let external = self.external_store.is_some();
+
+        // In external mode, bind only the declared inputs (the .drv's input closure) from the mount,
+        // so the output path is never in the sandbox's store view. Keys are the store-path basenames.
+        let external_input_names: Vec<std::path::PathBuf> = if external {
+            use std::os::unix::ffi::OsStrExt;
+            request
+                .inputs
+                .keys()
+                .map(|k| std::path::PathBuf::from(std::ffi::OsStr::from_bytes(k.as_ref())))
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         let spec = SandboxSpec::builder()
             .host_workdir(sandbox_path)
@@ -75,7 +100,15 @@ where
             .command(request.command_args)
             .env_vars(request.environment_vars)
             .additional_files(request.additional_files)
-            .with_inputs(request.inputs_dir, move |path| {
+            // #2: when an external whole-store mount is configured, read inputs through it (bwrap
+            // binds it) instead of a per-build castore FUSE.
+            .external_inputs(self.external_store.clone())
+            .external_input_names(external_input_names)
+            .with_inputs(request.inputs_dir, move |path| -> std::io::Result<Box<dyn crate::sandbox::InputsGuard>> {
+                if external {
+                    // Inputs are served by the external mount (bound by bwrap); no FUSE to mount.
+                    return Ok(Box::new(()));
+                }
                 let root_nodes = Box::new(request.inputs.clone());
                 let fs = snix_castore::fs::SnixStoreFs::new(
                     blob_service.clone(),
@@ -89,7 +122,7 @@ where
                     tokio::runtime::Handle::current(),
                 );
                 // FUTUREWORK: make fuse daemon threads configurable?
-                FuseDaemon::new(fs, path, 4, false)
+                Ok(Box::new(FuseDaemon::new(fs, path, 4, false)?))
             })
             .allow_network(
                 request

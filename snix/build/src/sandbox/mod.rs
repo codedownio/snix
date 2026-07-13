@@ -88,6 +88,23 @@ pub struct SandboxSpec {
     /// Whether to allow network access inside the sandbox.
     #[builder(default)]
     allow_network: bool,
+
+    /// Optional: a host path to use as the read-only inputs source (the overlay lower for
+    /// [InputsProvider::inputs_dir]) instead of the FUSE the `with_inputs` provider would mount.
+    /// This lets the build read its inputs through an already-mounted, cached whole-store mount
+    /// (e.g. nox-mount) rather than spinning up a per-build castore FUSE — bwrap binds it inside
+    /// its own namespace, so it works unprivileged. When set, the `with_inputs` provider is still
+    /// consulted for its `inputs_dir`, but its mount closure can be a no-op.
+    #[builder(default)]
+    external_inputs: Option<PathBuf>,
+
+    /// With [Self::external_inputs] set, the declared input paths (relative to `inputs_dir`) to
+    /// bind individually, read-only, from that mount — instead of binding the whole store as an
+    /// overlay lower. Binding only declared inputs keeps the *output* path (which may already exist
+    /// in the store) out of the sandbox's store view, so the build creates it fresh; it also gives
+    /// nix-style input purity. Empty = bind the whole `external_inputs` mount (whole-store mode).
+    #[builder(default)]
+    external_input_names: Vec<PathBuf>,
 }
 
 impl SandboxSpec {
@@ -125,6 +142,14 @@ impl SandboxSpec {
 
     pub fn inputs_provider(&self) -> &InputsProvider {
         &self.with_inputs
+    }
+
+    pub fn external_inputs(&self) -> Option<&Path> {
+        self.external_inputs.as_deref()
+    }
+
+    pub fn external_input_names(&self) -> &[PathBuf] {
+        &self.external_input_names
     }
 }
 
