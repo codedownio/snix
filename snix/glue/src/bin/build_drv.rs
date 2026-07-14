@@ -380,6 +380,45 @@ async fn build_one(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let drv = read_drv(drv_path);
 
+    // `builtin:fetchurl` derivations (nix's internal fetcher, e.g. <nix/fetchurl.nix> used by
+    // stdenv bootstrap sources) name no real builder program, so they can't go through the build
+    // service. Synthesize the fetch and ingest it natively, like the evaluator does for
+    // full-snix. ingest_and_persist verifies the fixed-output hash and puts the PathInfo.
+    if drv.builder == "builtin:fetchurl" {
+        let (name, fetch) = snix_glue::fetchurl::fetchurl_derivation_to_fetch(&drv)?;
+        let fetcher = snix_build_glue::fetchers::Fetcher::new(
+            services.blob_service.clone(),
+            services.directory_service.clone(),
+            services.path_info_service.clone(),
+            snix_store::nar::SimpleRenderer::new(
+                services.blob_service.clone(),
+                services.directory_service.clone(),
+            ),
+            vec![],
+        );
+        eprintln!("\u{2913} fetching {} (builtin:fetchurl) ...", drv_path);
+        let (store_path, path_info) = fetcher.ingest_and_persist(&name, fetch).await?;
+        // The fetch is content-addressed from the drv's declared hash, so a mismatch here can
+        // only mean the name/hash didn't reconstruct the drv's output path -- fail loudly.
+        let declared = drv
+            .outputs
+            .values()
+            .next()
+            .and_then(|o| o.path.as_ref())
+            .ok_or("builtin:fetchurl drv has no output path")?;
+        if store_path.to_owned() != *declared {
+            return Err(format!(
+                "builtin:fetchurl output path mismatch: fetched {store_path}, drv declares {declared}"
+            )
+            .into());
+        }
+        println!(
+            "OUTPUT /nix/store/{}  (builtin:fetchurl, nar_size={})",
+            store_path, path_info.nar_size
+        );
+        return Ok(());
+    }
+
     // Compute output NARs locally from the blob+directory services, rather than via the grpc NAR
     // service that construct_services prefers when the PathInfo client advertises one: nox-store
     // (unlike snix's own daemon) does not implement remote NAR calculation.
