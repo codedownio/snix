@@ -137,6 +137,12 @@ enum Commands {
         /// If enabled, accepts newline-delimited JSON instead of a list,
         /// and reads it in a streaming fashion.
         jsonl: bool,
+
+        /// Re-ingest every path even if its PathInfo already exists — backfills blobs/directories
+        /// for a store that has only runtime closures (build-time-only deps present as dangling
+        /// references).
+        #[arg(long, default_value_t = false)]
+        force: bool,
         // FUTUREWORK: add a flag to check for references to be valid
         // (in the sent set, or in the PathInfoService)
     },
@@ -471,6 +477,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             service_addrs,
             reference_graph_path,
             jsonl,
+            force,
         } => {
             let (blob_service, directory_service, path_info_service, _nar_calculation_service) =
                 snix_store::utils::construct_services(service_addrs).await?;
@@ -562,12 +569,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             span.pb_set_message(&format!("Ingesting {}", &store_path.to_string()));
                             span.pb_start();
 
-                            // skip if that path already exists
-                            if path_info_service
-                                .get(*store_path.digest())
-                                .await
-                                .map_err(std::io::Error::other)?
-                                .is_some()
+                            // skip if that path already exists (unless --force: re-ingest to backfill
+                            // missing blobs for paths whose PathInfo is present but content isn't).
+                            if !force
+                                && path_info_service
+                                    .get(*store_path.digest())
+                                    .await
+                                    .map_err(std::io::Error::other)?
+                                    .is_some()
                             {
                                 debug!(path_into.store_path=%store_path, "skipped, already exists");
                                 return Ok(());
