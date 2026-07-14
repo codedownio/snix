@@ -8,7 +8,7 @@ use url::Url;
 /// Takes a derivation produced by a call to `builtin:fetchurl` and returns the
 /// synthesized [Fetch] for it, as well as the name.
 #[instrument]
-pub(crate) fn fetchurl_derivation_to_fetch(drv: &Derivation) -> Result<(String, Fetch), Error> {
+pub fn fetchurl_derivation_to_fetch(drv: &Derivation) -> Result<(String, Fetch), Error> {
     if drv.builder != "builtin:fetchurl" {
         return Err(Error::BuilderInvalid);
     }
@@ -76,7 +76,7 @@ pub(crate) fn fetchurl_derivation_to_fetch(drv: &Derivation) -> Result<(String, 
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum Error {
+pub enum Error {
     #[error("Invalid builder")]
     BuilderInvalid,
     #[error("invalid arguments")]

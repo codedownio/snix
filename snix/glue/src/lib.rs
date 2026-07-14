@@ -4,7 +4,7 @@ pub mod builtins;
 pub mod snix_io;
 pub mod snix_store_io;
 
-mod fetchurl;
+pub mod fetchurl;
 
 #[cfg(test)]
 mod tests;
