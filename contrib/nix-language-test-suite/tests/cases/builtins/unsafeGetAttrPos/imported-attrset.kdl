@@ -1,0 +1,15 @@
+lang {
+  builtins "unsafeGetAttrPos"
+}
+
+environment {
+  fixtures {
+    file "attrset.nix" ref="assets/attrset.nix"
+  }
+
+  work-dir "/pwd/lang"
+}
+
+runtime-opts {
+  eval-strict
+}

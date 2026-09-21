@@ -26,7 +26,6 @@ paths = [
   "builtins/unsafeGetAttrPos/corepkgs",
   "builtins/unsafeGetAttrPos/removeAttrs",
   "builtins/unsafeGetAttrPos/intersectAttrs",
-  "builtins/unsafeGetAttrPos/eval-okay-inherit-attr-pos",
   "builtins/unsafeGetAttrPos/eval-okay-getattrpos-functionargs",
 
   # Line and column are evaluated eagerly

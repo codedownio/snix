@@ -19,6 +19,9 @@ paths = [
 
   # getAttrPos calculates columns differently in 2.3
   "builtins/unsafeGetAttrPos/eval-okay-inherit-attr-pos",
+  "builtins/unsafeGetAttrPos/inherit",
+  "builtins/unsafeGetAttrPos/inherit-mixed",
+  "builtins/unsafeGetAttrPos/imported-attrset",
 
   # Newer Nix versions return an attr set, while 2.3 returns null
   "builtins/unsafeGetAttrPos/corepkgs",

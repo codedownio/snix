@@ -171,11 +171,19 @@ enum KeySlot {
     None { name: SmolStr },
 
     /// The key is statically known and has a slot.
-    Static { slot: LocalIdx, name: SmolStr },
+    Static {
+        slot: LocalIdx,
+        name: SmolStr,
+        pos_span: Span,
+    },
 
     /// The key is dynamic, i.e. only known at runtime, and must be compiled
     /// into its slot.
-    Dynamic { slot: LocalIdx, attr: ast::Attr },
+    Dynamic {
+        slot: LocalIdx,
+        attr: ast::Attr,
+        pos_span: Span,
+    },
 }
 
 struct TrackedBinding {
@@ -379,6 +387,7 @@ impl Compiler<'_, '_> {
                         if kind.is_attrs() {
                             self.emit_constant(name.as_str().into(), &attr);
                             let span = self.span_for(&attr);
+                            self.push_attrset_pos(span);
                             self.scope_mut().declare_phantom(span, true);
                         }
 
@@ -441,6 +450,7 @@ impl Compiler<'_, '_> {
                 KeySlot::Static {
                     slot: self.scope_mut().declare_phantom(span, false),
                     name: name.clone(),
+                    pos_span: span,
                 }
             } else {
                 KeySlot::None { name: name.clone() }
@@ -493,14 +503,13 @@ impl Compiler<'_, '_> {
             *count += 1;
 
             let key_span = self.span_for(&key);
-
             let pos_span = entry.lowered_from.unwrap_or(key_span);
-            self.push_attrset_pos(pos_span);
 
             let key_slot = match expr_static_attr_str(&key) {
                 Some(name) if kind.is_attrs() => KeySlot::Static {
                     name,
                     slot: self.scope_mut().declare_phantom(key_span, false),
+                    pos_span,
                 },
 
                 Some(name) => KeySlot::None { name },
@@ -508,6 +517,7 @@ impl Compiler<'_, '_> {
                 None if kind.is_attrs() => KeySlot::Dynamic {
                     attr: key,
                     slot: self.scope_mut().declare_phantom(key_span, false),
+                    pos_span,
                 },
 
                 None => {
@@ -593,15 +603,25 @@ impl Compiler<'_, '_> {
             match binding.key_slot {
                 KeySlot::None { .. } => {} // nothing to do here
 
-                KeySlot::Static { slot, name } => {
+                KeySlot::Static {
+                    slot,
+                    name,
+                    pos_span,
+                } => {
                     let span = self.scope()[slot].span;
                     self.emit_constant(name.as_str().into(), &OrEntireFile(span));
                     self.scope_mut().mark_initialised(slot);
+                    self.push_attrset_pos(pos_span);
                 }
 
-                KeySlot::Dynamic { slot, attr } => {
+                KeySlot::Dynamic {
+                    slot,
+                    attr,
+                    pos_span,
+                } => {
                     self.compile_attr(slot, &attr);
                     self.scope_mut().mark_initialised(slot);
+                    self.push_attrset_pos(pos_span);
                 }
             }
 

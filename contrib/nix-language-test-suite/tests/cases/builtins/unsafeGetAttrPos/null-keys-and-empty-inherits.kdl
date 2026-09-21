@@ -1,0 +1,7 @@
+lang {
+    builtins "unsafeGetAttrPos"
+}
+
+runtime-opts {
+    eval-strict
+}

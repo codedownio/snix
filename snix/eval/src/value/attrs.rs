@@ -406,16 +406,12 @@ impl NixAttrs {
             count,
             stack_slice.len(),
         );
-        // FUTUREWORK: this invariant will be true once we fully
-        // implement span collection from everywhere e.g. inherit (from),
-        // formals, etc.
-        //
-        // debug_assert!(
-        //     spans.len() == count || spans.is_empty(),
-        //     "construct_attrs called with count == {}, but spans.len() == {}",
-        //     count,
-        //     spans.len(),
-        // );
+        debug_assert!(
+            spans.len() == count || spans.is_empty(),
+            "construct_attrs called with count == {}, but spans.len() == {}",
+            count,
+            spans.len(),
+        );
 
         // Optimisation: Empty attribute set
         if count == 0 {
