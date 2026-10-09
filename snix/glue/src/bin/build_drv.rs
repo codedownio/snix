@@ -53,6 +53,13 @@ struct Args {
     #[arg(long)]
     drv_dir: Vec<String>,
 
+    /// How many derivations to build at once in a `--recursive` build. The plan is a dependency
+    /// graph, so independent derivations can run in parallel; each still waits for its own inputs.
+    /// The build service applies its own limit too (e.g. `bwrap:...?concurrency=N`), so keep the
+    /// two in step.
+    #[arg(long, default_value = "4")]
+    concurrency: usize,
+
     /// Value for NIX_BUILD_CORES inside the sandbox (like nix's --cores).
     /// Defaults to all host cores; derivation_into_build_request otherwise leaves it at 0,
     /// which makes stdenv's enableParallelBuilding build single-threaded.
@@ -172,11 +179,14 @@ async fn closure_complete(
 /// actually references are checked — a substitutable drv with some other uncached output must not
 /// drag its build closure in. A drv whose outputs are present but whose closure dangles is
 /// traversed (not rebuilt) so the drvs producing the dangling paths get planned.
-/// Returns the drvs to build, leaves first.
+/// Returns the drvs to build, leaves first, together with each one's dependencies *within that
+/// plan* — the edges a scheduler needs to run independent derivations at the same time. A planned
+/// drv can depend on another one indirectly, through a drv whose outputs are present but whose
+/// closure dangles (traversed, not rebuilt), so the edges follow those intermediates through.
 async fn plan_missing(
     top: &StorePath,
     path_info_service: &Arc<dyn PathInfoService>,
-) -> Result<Vec<StorePath>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(Vec<StorePath>, HashMap<StorePath, Vec<StorePath>>), Box<dyn std::error::Error + Send + Sync>> {
     // drv -> (needs building, its input drvs); recorded for built AND traversed drvs so topo
     // dependencies propagate through present-but-dangling intermediates.
     let mut graph: HashMap<StorePath, (bool, Vec<StorePath>)> = HashMap::new();
@@ -261,10 +271,33 @@ async fn plan_missing(
             return Err("dependency cycle among missing drvs".into());
         }
     }
-    Ok(order
-        .into_iter()
-        .filter(|d| graph[d].0)
-        .collect())
+    let plan: Vec<StorePath> = order.into_iter().filter(|d| graph[d].0).collect();
+    let planned: HashSet<StorePath> = plan.iter().cloned().collect();
+
+    // Each planned drv's planned dependencies. A child that isn't itself planned is walked
+    // through (it is present but dangling), so a planned descendant behind it still becomes an
+    // edge; without that the scheduler would start a build before its inputs exist.
+    let mut deps: HashMap<StorePath, Vec<StorePath>> = HashMap::new();
+    for d in &plan {
+        let mut found: std::collections::BTreeSet<StorePath> = Default::default();
+        let mut seen: HashSet<StorePath> = HashSet::new();
+        let mut frontier: VecDeque<StorePath> = graph[d].1.iter().cloned().collect();
+        while let Some(c) = frontier.pop_front() {
+            if !seen.insert(c.clone()) {
+                continue;
+            }
+            if planned.contains(&c) {
+                found.insert(c);
+                continue;
+            }
+            if let Some((_, children)) = graph.get(&c) {
+                frontier.extend(children.iter().cloned());
+            }
+        }
+        deps.insert(d.clone(), found.into_iter().collect());
+    }
+
+    Ok((plan, deps))
 }
 
 /// The declared inputs of a drv: input_sources + each input derivation's requested output paths
@@ -580,7 +613,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    let plan = plan_missing(&drv_path, &services.path_info_service).await?;
+    let (plan, plan_deps) = plan_missing(&drv_path, &services.path_info_service).await?;
     if plan.is_empty() {
         eprintln!("nothing to build: all outputs of {} present in castore", drv_path);
         print_top();
@@ -588,8 +621,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Ok(());
     }
     eprintln!("building {} missing drvs (leaves first):", plan.len());
+    // Announce the plan as its dependency edges, one line per planned drv followed by the planned
+    // drvs it waits for. A driver turns these into the build graph it shows (nox maps them onto
+    // the build state's `dependencies`), and they say which derivations are merely pending —
+    // information the bare list of paths didn't carry.
     for d in &plan {
-        eprintln!("  {d}");
+        let deps = plan_deps.get(d).map(Vec::as_slice).unwrap_or(&[]);
+        let mut line = format!("PLAN_DEP /nix/store/{d}");
+        for c in deps {
+            line.push_str(&format!(" /nix/store/{c}"));
+        }
+        eprintln!("{line}");
     }
 
     // Pre-check every planned build's declared input closure and report ALL missing paths in one
@@ -622,17 +664,103 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         std::process::exit(3);
     }
 
-    let total = plan.len();
-    for (i, d) in plan.iter().enumerate() {
-        eprintln!("[{}/{}] {}", i + 1, total, d);
-        let t = std::time::Instant::now();
-        build_one(d, &services).await?;
-        eprintln!("[{}/{}] {} done in {:.1}s", i + 1, total, d, t.elapsed().as_secs_f64());
-    }
+    build_plan(&plan, &plan_deps, args.concurrency.max(1), &services).await?;
     print_top();
     print_inputs();
 
     Ok(())
+}
+
+/// Build every drv in `plan`, up to `concurrency` at a time, each only after the planned drvs it
+/// depends on have finished. The plan is leaves-first, but building it in that order one at a time
+/// serialises a graph that is mostly parallel — a 1000-derivation environment spent its whole wall
+/// clock waiting on one builder at a time.
+///
+/// Progress keeps the shape a driver parses: `[i/total] <drv>` when a build starts (i is start
+/// order, so lines interleave), `[i/total] <drv> done in Xs` when it finishes, and
+/// `[i/total] <drv> failed: <error>` when it doesn't. The first failure is returned, after the
+/// builds already in flight are left to finish or fail on their own.
+async fn build_plan(
+    plan: &[StorePath],
+    plan_deps: &HashMap<StorePath, Vec<StorePath>>,
+    concurrency: usize,
+    services: &Services,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let total = plan.len();
+    let index: HashMap<&StorePath, usize> = plan.iter().enumerate().map(|(i, d)| (d, i)).collect();
+
+    // How many of each drv's planned dependencies are still unbuilt, and who is waiting on it.
+    let mut waiting_on: HashMap<&StorePath, usize> = HashMap::new();
+    let mut dependents: HashMap<&StorePath, Vec<&StorePath>> = HashMap::new();
+    for d in plan {
+        let deps: Vec<&StorePath> = plan_deps
+            .get(d)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .filter(|c| index.contains_key(*c))
+            .collect();
+        waiting_on.insert(d, deps.len());
+        for c in deps {
+            dependents.entry(c).or_default().push(d);
+        }
+    }
+
+    let mut ready: VecDeque<&StorePath> = plan.iter().filter(|d| waiting_on[*d] == 0).collect();
+    let mut running = futures::stream::FuturesUnordered::new();
+    let mut started = 0usize;
+    let mut finished = 0usize;
+    let mut first_error: Option<Box<dyn std::error::Error + Send + Sync>> = None;
+
+    loop {
+        // Fill the slots, but stop handing out new work once something has failed.
+        while first_error.is_none() && running.len() < concurrency {
+            let Some(d) = ready.pop_front() else { break };
+            started += 1;
+            let nth = started;
+            eprintln!("[{nth}/{total}] /nix/store/{d}");
+            running.push(async move {
+                let t = std::time::Instant::now();
+                let res = build_one(d, services).await;
+                (d, nth, t.elapsed(), res)
+            });
+        }
+
+        let Some((d, nth, elapsed, res)) = running.next().await else {
+            break; // nothing in flight and nothing ready: done (or stopped after a failure)
+        };
+        finished += 1;
+        match res {
+            Ok(()) => {
+                eprintln!("[{nth}/{total}] /nix/store/{d} done in {:.1}s", elapsed.as_secs_f64());
+                for p in dependents.get(&d).map(Vec::as_slice).unwrap_or(&[]) {
+                    let n = waiting_on.get_mut(*p).expect("dependent is in the plan");
+                    *n -= 1;
+                    if *n == 0 {
+                        ready.push_back(p);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[{nth}/{total}] /nix/store/{d} failed: {e}");
+                if first_error.is_none() {
+                    first_error = Some(e);
+                }
+            }
+        }
+    }
+
+    match first_error {
+        Some(e) => Err(e),
+        // Every planned drv must have run: stopping early with slots free would mean a cycle
+        // among the planned edges, and silently skipping a build only resurfaces later as a
+        // missing path.
+        None if finished < total => Err(format!(
+            "only {finished} of {total} planned drvs ran; the planned dependencies have a cycle"
+        )
+        .into()),
+        None => Ok(()),
+    }
 }
 
 fn main() {
