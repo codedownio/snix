@@ -1,7 +1,10 @@
 let
 
-  config = 
+  config =
     {
+      # Dotted definitions are shorthand for nested attribute sets and merge
+      # definitions that share an intermediate path.
+      # See Nix at d407d572fdc72f4eb14cc0f37d7d61446425b663.
       services.sshd.enable = true;
       services.sshd.port = 22;
       services.httpd.port = 80;

@@ -1,0 +1,10 @@
+environment {
+  fixtures {
+    file "lib.nix" ref="../../nixlib/lib.nix"
+  }
+}
+
+
+runtime-opts {
+  eval-strict
+}
