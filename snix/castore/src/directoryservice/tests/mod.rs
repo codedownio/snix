@@ -2,7 +2,7 @@
 //! We use [rstest] and [rstest_reuse] to provide all services we want to test
 //! against, and then apply this template to all test functions.
 
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use rstest::*;
 use rstest_reuse::{self, *};
 
@@ -275,4 +275,26 @@ async fn upload_reject_wrong_size(directory_service: impl DirectoryService) {
             "when second put succeeds, close must fail"
         )
     }
+}
+
+/// Many concurrent gets on one gRPC connection must all succeed. A get that
+/// drops its response stream early resets the HTTP/2 stream, and the
+/// connection fails once too many of those resets are pending.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn grpc_concurrent_gets() {
+    let directory_service = make_grpc_directory_service_client().await;
+    let digest = directory_service
+        .put(DIRECTORY_A.clone())
+        .await
+        .expect("must succeed");
+
+    let found = futures::stream::iter(0..4_000)
+        .map(|_| directory_service.get(&digest))
+        .buffer_unordered(256)
+        .try_fold(0, |found, dir| async move {
+            Ok(found + usize::from(dir.is_some()))
+        })
+        .await
+        .expect("must not fail");
+    assert_eq!(4_000, found);
 }

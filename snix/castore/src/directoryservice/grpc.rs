@@ -52,8 +52,8 @@ where
     #[instrument(level = "trace", skip_all, fields(directory.digest = %digest, instance_name = %self.instance_name))]
     async fn get(&self, digest: &B3Digest) -> Result<Option<Directory>, super::Error> {
         // clone the client, as it takes a &mut.
-        // We retrieve the first message only, then close the stream (we set recursive to false)
-        match self
+        // We set recursive to false, so the stream holds this Directory only.
+        let mut stream = self
             .grpc_client
             .clone()
             .get(proto::GetDirectoryRequest {
@@ -62,29 +62,31 @@ where
             })
             .await
             .map_err(Error::Tonic)?
-            .into_inner()
-            .message()
-            .await
-        {
-            Ok(Some(proto_directory)) => {
-                // Validate the retrieved Directory indeed has the
-                // digest we expect it to have, to detect corruptions.
-                let actual_digest = proto_directory.digest();
-                if &actual_digest != digest {
-                    Err(Error::WrongDigest {
-                        expected: *digest,
-                        actual: actual_digest,
-                    })?
-                } else {
-                    let directory =
-                        Directory::try_from(proto_directory).map_err(Error::DirectoryValidation)?;
-                    Ok(Some(directory))
-                }
-            }
-            Ok(None) => Ok(None),
-            Err(e) if e.code() == Code::NotFound => Ok(None),
+            .into_inner();
+        let proto_directory = match stream.message().await {
+            Ok(Some(proto_directory)) => proto_directory,
+            Ok(None) => return Ok(None),
+            Err(e) if e.code() == Code::NotFound => return Ok(None),
             Err(e) => Err(Error::Tonic(e))?,
+        };
+        // Check that the stream ends after this Directory. Dropping it before
+        // its end resets the HTTP/2 stream, and once too many resets are
+        // pending, the connection fails with all requests on it.
+        if stream.message().await.map_err(Error::Tonic)?.is_some() {
+            Err(Error::UnexpectedMessage)?
         }
+
+        // Validate the retrieved Directory indeed has the
+        // digest we expect it to have, to detect corruptions.
+        let actual_digest = proto_directory.digest();
+        if &actual_digest != digest {
+            Err(Error::WrongDigest {
+                expected: *digest,
+                actual: actual_digest,
+            })?
+        }
+        let directory = Directory::try_from(proto_directory).map_err(Error::DirectoryValidation)?;
+        Ok(Some(directory))
     }
 
     #[instrument(level = "trace", skip_all, fields(directory.digest = %directory.digest(), instance_name = %self.instance_name))]
@@ -224,6 +226,9 @@ pub enum Error {
         expected: B3Digest,
         actual: B3Digest,
     },
+
+    #[error("more than one directory returned for a non-recursive get")]
+    UnexpectedMessage,
 
     #[error("tonic status: {0}")]
     Tonic(#[from] tonic::Status),
