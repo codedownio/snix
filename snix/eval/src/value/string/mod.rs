@@ -286,7 +286,8 @@ impl InternerInner {
         }
 
         let string = NixString::new_inner(contents, None);
-        self.map.insert_unique(hashed, string.0, |val| hash(val));
+        self.map
+            .insert_unique(hashed, string.0, |val| hash(NixString(*val).as_bytes()));
         #[cfg(feature = "no_leak")]
         self.interned_strings.insert(string.0);
         string
@@ -868,6 +869,20 @@ mod tests {
     #[test]
     fn size() {
         assert_eq!(std::mem::size_of::<NixString>(), 8);
+    }
+
+    #[test]
+    #[cfg(not(feature = "no_leak"))]
+    fn test_interner_growth() {
+        let s1 = NixString::from("test_string");
+        for i in 0..1000 {
+            let _ = NixString::from(format!("str_{i}"));
+        }
+        let s2 = NixString::from("test_string");
+        assert_eq!(
+            s1.0, s2.0,
+            "Interned strings must share pointer after map growth"
+        );
     }
 
     #[proptest]
