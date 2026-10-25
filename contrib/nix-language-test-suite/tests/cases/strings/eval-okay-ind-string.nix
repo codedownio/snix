@@ -64,11 +64,13 @@ let
     is significant (not whitespace).
   '';
 
+  # A string containing only a newline and indentation evaluates to the empty string.
   s10 = ''
   '';
 
   s11 = '''';
 
+  # Whitespace-only content without a newline also evaluates to the empty string.
   s12 = ''   '';
 
   s13 = ''

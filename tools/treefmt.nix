@@ -72,6 +72,7 @@ let
           excludes = [
             "snix/eval/src/tests/nix_tests/*"
             "snix/glue/src/tests/nix_tests/*"
+            "contrib/nix-language-test-suite/tests/*"
           ];
         };
       };
