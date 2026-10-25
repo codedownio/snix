@@ -266,6 +266,7 @@ fn matches_expected_error(version: NixVersion, error_string: &str, expected: &Er
             NixVersion::CppNixLatest => &["does not exist", "has an unsupported type"][..],
             _ => &["No such file or directory", "has an unsupported type"][..],
         },
+        ErrorKind::NotCallable => &["attempt to call something which is not a function"][..],
         ErrorKind::TypeError => match version {
             NixVersion::CppNix23 => &["requires a function", "was expected"][..],
             _ => &["requires a function", "expected a"][..],

@@ -1,0 +1,7 @@
+lang {
+  builtins "toJSON" "map" "tryEval" "throw"
+}
+
+runtime-opts {
+  eval-strict
+}

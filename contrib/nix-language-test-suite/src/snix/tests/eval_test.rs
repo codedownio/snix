@@ -245,6 +245,7 @@ fn matches_expected_error(result: &snix_eval::EvaluationResult, exp_kind: &Error
         ErrorKind::NotCoercibleToString => {
             matches!(snix_kind, snix_eval::ErrorKind::NotCoercibleToString { .. })
         }
+        ErrorKind::NotCallable => matches!(snix_kind, snix_eval::ErrorKind::NotCallable(_)),
         ErrorKind::TypeError => matches!(snix_kind, snix_eval::ErrorKind::TypeError { .. }),
         ErrorKind::HashMismatch => {
             let snix_eval::ErrorKind::SnixError(err) = snix_kind else {
