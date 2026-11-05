@@ -121,7 +121,7 @@ in
   };
 
   boot.initrd.systemd.enable = true;
-  zramSwap.enable = true;
+  boot.zswap.enable = true;
 
   system.stateVersion = "25.05";
 }

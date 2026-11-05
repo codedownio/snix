@@ -169,7 +169,7 @@ in
     depot.ops.users.edef ++ depot.ops.users.flokli ++ depot.ops.users.raito;
 
   boot.initrd.systemd.enable = true;
-  zramSwap.enable = true;
+  boot.zswap.enable = true;
 
   system.stateVersion = "25.05";
 }
