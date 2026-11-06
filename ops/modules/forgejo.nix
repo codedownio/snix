@@ -210,8 +210,8 @@ in
           # Cookie only works over https
           COOKIE_SECURE = true;
 
-          # 5 day sessions
-          SESSION_LIFE_TIME = 86400 * 5;
+          SESSION_LIFE_TIME = 86400;
+          GC_INTERVAL_TIME = 86400 / 4;
         };
 
         # Careful with these!
