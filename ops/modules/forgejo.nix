@@ -101,6 +101,9 @@ in
     systemd.services.forgejo = {
       after = [ "redis-forgejo.service" ];
       wants = [ "redis-forgejo.service" ];
+      serviceConfig.MemoryHigh = "1.3G";
+      serviceConfig.MemoryMax = "1.5G";
+      serviceConfig.MemorySwapMax = "500M";
     };
 
     services.forgejo = {
