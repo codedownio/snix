@@ -1,0 +1,7 @@
+lang {
+  builtins "concatMap" "map" "tryEval" "throw"
+}
+
+runtime-opts {
+  eval-strict
+}

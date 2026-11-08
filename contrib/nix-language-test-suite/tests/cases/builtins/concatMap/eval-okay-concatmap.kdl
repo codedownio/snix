@@ -1,0 +1,13 @@
+lang {
+  builtins "concatMap" "genList"
+}
+
+runtime-opts {
+  eval-strict
+}
+
+environment {
+  fixtures {
+    file "lib.nix" ref="../../../nixlib/lib.nix"
+  }
+}
