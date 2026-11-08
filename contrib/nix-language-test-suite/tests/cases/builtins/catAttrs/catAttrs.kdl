@@ -1,0 +1,7 @@
+lang {
+  builtins "catAttrs"
+}
+
+runtime-opts {
+  eval-strict
+}
