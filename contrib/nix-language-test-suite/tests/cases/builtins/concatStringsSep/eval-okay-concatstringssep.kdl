@@ -1,0 +1,7 @@
+lang {
+  builtins "concatStringsSep"
+}
+
+runtime-opts {
+  eval-strict
+}

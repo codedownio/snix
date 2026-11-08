@@ -1,0 +1,7 @@
+lang {
+  builtins "concatStringsSep" "map" "tryEval" "throw"
+}
+
+runtime-opts {
+  eval-strict
+}
