@@ -1,16 +1,12 @@
 # This file is read by agenix standalone, to know which audiences to (re)encrypt secrets to.
 
 let
-  raito = [
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICaw9ihTG7ucB8P38XdalEWev8+q96e2yNm4B+/I9IJp"
-  ];
-
-  edef = [
-    "age1n8vj5s4s9vyl8cq76q3mxaj5yxhmeuzh3puffp27j59e6vsj9frq34f90r"
-  ];
-
   flokli = [
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPTVTXOutUZZjXLB0lUSgeKcSY/8mxKkC0ingGK1whD2 flokli"
+  ];
+
+  picnoir = [
+    "age1r6gg90uwpacmkkm53zn5jgs38p2f3uam53w24q0g0ttyw0tcsups9m0s3l"
   ];
 
   gerrit01 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN+RCLAExaM5EC70UsCPMtDT1Cfa80Ux/vex95fLk9S4 root@gerrit01";
@@ -20,7 +16,7 @@ let
   meta01 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINj2csTShq5PsmB/T0596TASyf7VImD4592HEqaYHgKh root@meta01";
   snixCache = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF5bYa2cxaTUpweycBNv1YNDNOFPt4LR9I9bEm2X6GdH root@snix-cache";
 
-  superadmins = raito ++ edef ++ flokli;
+  superadmins = flokli ++ picnoir;
 
   allDefault.publicKeys = superadmins ++ [
     gerrit01

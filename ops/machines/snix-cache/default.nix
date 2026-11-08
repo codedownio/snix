@@ -63,7 +63,7 @@ in
     # Enable SSH and add some keys
     services.openssh.enable = true;
 
-    users.users.root.openssh.authorizedKeys.keys = depot.ops.users.edef ++ depot.ops.users.flokli;
+    users.users.root.openssh.authorizedKeys.keys = depot.ops.users.flokli ++ depot.ops.users.picnoir;
 
     environment.systemPackages = [
       pkgs.helix

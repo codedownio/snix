@@ -130,8 +130,7 @@ in
   ];
 
   time.timeZone = "UTC";
-  users.users.root.openssh.authorizedKeys.keys =
-    depot.ops.users.edef ++ depot.ops.users.flokli ++ depot.ops.users.raito;
+  users.users.root.openssh.authorizedKeys.keys = depot.ops.users.flokli ++ depot.ops.users.picnoir;
   users.groups.kvm = { };
   users.users.root.extraGroups = [ "kvm" ];
 
