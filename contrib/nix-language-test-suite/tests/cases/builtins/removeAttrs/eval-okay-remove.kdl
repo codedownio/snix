@@ -1,0 +1,7 @@
+lang {
+  builtins "removeAttrs"
+}
+
+runtime-opts {
+  eval-strict
+}

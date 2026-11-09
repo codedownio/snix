@@ -289,7 +289,7 @@ fn matches_expected_error(result: &snix_eval::EvaluationResult, exp_kind: &Error
             | snix_eval::ErrorKind::UnexpectedArgumentFormals { .. } => true,
             _ => false,
         },
-        ErrorKind::MissingArgument => {
+        ErrorKind::MissingArgument | ErrorKind::AttributeNotFound => {
             matches!(snix_kind, snix_eval::ErrorKind::AttributeNotFound { .. })
         }
         ErrorKind::VariableAlreadyDefined => {

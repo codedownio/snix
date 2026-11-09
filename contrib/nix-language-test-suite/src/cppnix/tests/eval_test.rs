@@ -296,6 +296,9 @@ fn matches_expected_error(version: NixVersion, error_string: &str, expected: &Er
             &["unsupported argument", "called with unexpected argument"][..]
         }
         ErrorKind::MissingArgument => &["called without required argument"][..],
+        ErrorKind::AttributeNotFound => {
+            return error_string.contains("attribute") && error_string.contains("missing");
+        }
         ErrorKind::VariableAlreadyDefined => &["already defined at"][..],
         ErrorKind::DuplicateAttrsKey => &["already defined at"][..],
         ErrorKind::UnexpectedContext => match version {
