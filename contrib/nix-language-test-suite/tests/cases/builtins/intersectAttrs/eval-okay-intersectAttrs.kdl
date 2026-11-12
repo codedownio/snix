@@ -1,0 +1,7 @@
+lang {
+  builtins "intersectAttrs" "mapAttrs" "throw" "abort"
+}
+
+runtime-opts {
+  eval-strict
+}

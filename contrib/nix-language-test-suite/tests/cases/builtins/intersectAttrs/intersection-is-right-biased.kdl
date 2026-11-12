@@ -1,0 +1,7 @@
+lang {
+  builtins "intersectAttrs"
+}
+
+runtime-opts {
+  eval-strict
+}
