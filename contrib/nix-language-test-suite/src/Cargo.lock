@@ -2765,6 +2765,7 @@ dependencies = [
 name = "nix-language-test-suite-snix"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "clap",
  "nix-compat",
  "nix-language-test-suite-common",

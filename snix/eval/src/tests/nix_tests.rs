@@ -1,13 +1,8 @@
-use crate::{EvalIO, FileType, value::Value};
+use crate::{EvalIO, value::Value};
 use builtin_macros::builtins;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
-use std::{
-    ffi::{OsStr, OsString},
-    io::{self},
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::path::PathBuf;
 
 #[builtins]
 mod mock_builtins {
@@ -37,64 +32,6 @@ mod mock_builtins {
     }
 }
 
-/// Thin wrapper around the StdIO implementation that overrides some methods to provide
-/// deterministic environment for tests.
-///
-/// Tests that need store-aware IO (e.g. actual path importing, derivation
-/// creation, or fetchers) should be put in //snix/glue.
-struct MockIo<T> {
-    // Actual underlying [EvalIO] implementation.
-    actual: T,
-}
-
-impl<T> MockIo<T> {
-    pub fn new(actual: T) -> Self {
-        Self { actual }
-    }
-}
-
-impl<T> EvalIO for MockIo<T>
-where
-    T: AsRef<dyn EvalIO>,
-{
-    fn store_dir(&self) -> Option<String> {
-        self.actual.as_ref().store_dir()
-    }
-
-    fn import_path(&self, path: &Path) -> io::Result<PathBuf> {
-        self.actual.as_ref().import_path(path)
-    }
-
-    fn path_exists(&self, path: &Path) -> io::Result<bool> {
-        self.actual.as_ref().path_exists(path)
-    }
-
-    fn open(&self, path: &Path) -> io::Result<Box<dyn io::Read>> {
-        self.actual.as_ref().open(path)
-    }
-
-    fn file_type(&self, path: &Path) -> io::Result<FileType> {
-        self.actual.as_ref().file_type(path)
-    }
-
-    fn read_dir(&self, path: &Path) -> io::Result<Vec<(bytes::Bytes, FileType)>> {
-        self.actual.as_ref().read_dir(path)
-    }
-
-    fn get_env(&self, key: &OsStr) -> Option<OsString> {
-        // for eval-okay-getenv.nix
-        if key == "TEST_VAR" {
-            return Some(OsString::from_str("foo").expect("This conversion is infallible."));
-        };
-        // for path interpolation cases
-        if key == "HOME" {
-            return Some(OsString::from_str("/fake-home").expect("This conversion is infallible."));
-        }
-
-        self.actual.as_ref().get_env(key)
-    }
-}
-
 #[cfg(feature = "impure")]
 fn eval_test(code_path: PathBuf, expect_success: bool) {
     use crate::{StdIO, vm::EvalMode};
@@ -110,7 +47,7 @@ fn eval_test(code_path: PathBuf, expect_success: bool) {
 
     let eval = crate::Evaluation::builder_impure()
         .mode(EvalMode::Strict)
-        .io_handle(Box::new(MockIo::new(Box::new(StdIO) as Box<dyn EvalIO>)) as Box<dyn EvalIO>)
+        .io_handle(Box::new(StdIO) as Box<dyn EvalIO>)
         .add_builtins(mock_builtins::builtins())
         .build();
 

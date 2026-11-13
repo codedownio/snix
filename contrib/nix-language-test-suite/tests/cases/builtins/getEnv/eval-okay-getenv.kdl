@@ -1,0 +1,8 @@
+lang {
+    builtins "getEnv"
+}
+
+environment {
+    env-var "TEST_VAR" "foo"
+}
+

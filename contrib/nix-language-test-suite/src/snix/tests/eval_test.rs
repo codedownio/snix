@@ -1,6 +1,7 @@
 use pretty_assertions::{assert_eq, assert_ne};
 use snix_eval::builtins::impure_builtins;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -51,6 +52,50 @@ impl SkipConfig {
     }
 }
 
+/// Thin wrapper around given EvalIO implementation that overrides get_env to
+/// return from a HashMap, instead of the inner EvalIO impl.
+/// All other lookups are passed through.
+struct MockIO<T> {
+    inner: T,
+    envs: HashMap<OsString, OsString>,
+}
+
+impl<T> MockIO<T> {
+    fn new(io: T, envs: HashMap<OsString, OsString>) -> Self {
+        MockIO { inner: io, envs }
+    }
+}
+
+impl<T: AsRef<dyn EvalIO>> EvalIO for MockIO<T> {
+    fn path_exists(&self, path: &Path) -> std::io::Result<bool> {
+        self.inner.as_ref().path_exists(path)
+    }
+
+    fn open(&self, path: &Path) -> std::io::Result<Box<dyn std::io::Read>> {
+        self.inner.as_ref().open(path)
+    }
+
+    fn file_type(&self, path: &Path) -> std::io::Result<snix_eval::FileType> {
+        self.inner.as_ref().file_type(path)
+    }
+
+    fn read_dir(&self, path: &Path) -> std::io::Result<Vec<(bytes::Bytes, snix_eval::FileType)>> {
+        self.inner.as_ref().read_dir(path)
+    }
+
+    fn import_path(&self, path: &Path) -> std::io::Result<PathBuf> {
+        self.inner.as_ref().import_path(path)
+    }
+
+    fn store_dir(&self) -> Option<String> {
+        self.inner.as_ref().store_dir()
+    }
+
+    fn get_env(&self, key: &OsStr) -> Option<OsString> {
+        self.envs.get(key).cloned()
+    }
+}
+
 fn build_eval(
     test_case: &TestCase,
 ) -> (
@@ -87,11 +132,17 @@ fn build_eval(
         EvalMode::Lazy
     };
 
-    let mut eval_builder = Evaluation::builder(Box::new(SnixIO::new(
-        snix_store_io.clone() as Rc<dyn EvalIO>
-    )) as Box<dyn EvalIO>)
-    .mode(eval_mode)
-    .enable_import();
+    let io: Rc<dyn EvalIO> = Rc::new(SnixIO::new(snix_store_io.clone() as Rc<dyn EvalIO>));
+    let envs = test_case
+        .environment
+        .env_vars
+        .iter()
+        .map(|var| (OsString::from(&var.name), OsString::from(&var.value)))
+        .collect();
+
+    let mut eval_builder = Evaluation::builder(Box::new(MockIO::new(io, envs)) as Box<dyn EvalIO>)
+        .mode(eval_mode)
+        .enable_import();
 
     eval_builder = add_derivation_builtins(eval_builder, Rc::clone(&snix_store_io));
     eval_builder = add_fetcher_builtins(eval_builder, Rc::clone(&snix_store_io));

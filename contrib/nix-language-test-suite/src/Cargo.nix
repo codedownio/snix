@@ -11636,6 +11636,10 @@ rec {
         libName = "nix_language_test_suite_snix";
         dependencies = [
           {
+            name = "bytes";
+            packageId = "bytes";
+          }
+          {
             name = "tokio";
             packageId = "tokio";
           }
