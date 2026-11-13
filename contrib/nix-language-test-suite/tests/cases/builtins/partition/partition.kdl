@@ -1,0 +1,7 @@
+lang {
+  builtins "partition" "length"
+}
+
+runtime-opts {
+  eval-strict
+}

@@ -1,0 +1,9 @@
+lang {
+  builtins "partition" "concatLists" "genList" "import"
+}
+
+environment {
+  fixtures {
+    file "lib.nix" ref="../../../nixlib/lib.nix"
+  }
+}

@@ -1,0 +1,7 @@
+lang {
+  builtins "partition" "map" "tryEval" "throw"
+}
+
+runtime-opts {
+  eval-strict
+}
