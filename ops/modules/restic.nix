@@ -1,5 +1,4 @@
-# Configure restic backups to S3-compatible storage, in our case
-# Hetzner Cloud object storage.
+# Configure restic backups to S3-compatible storage.
 #
 # Conventions:
 # - restic's cache lives in /var/backup/restic/cache
@@ -24,7 +23,7 @@ in
 {
   options.services.depot.restic = {
     enable = lib.mkEnableOption "the restic backups";
-    bucketEndpoint = mkStringOption "fsn1.your-objectstorage.com";
+    bucketEndpoint = mkStringOption "garage3.cyberchaos.dev";
     bucketName = mkStringOption "snix-backups";
     bucketCredentials = mkStringOption config.age.secrets.restic-bucket-credentials.path;
     repository = mkStringOption config.networking.hostName;
@@ -48,8 +47,6 @@ in
 
   config = lib.mkIf cfg.enable {
     systemd.services.restic = {
-      description = "Backups to Hetzner Cloud";
-
       script = "${pkgs.restic}/bin/restic backup ${lib.concatStringsSep " " cfg.paths}";
 
       serviceConfig.ExecStartPre = pkgs.writeShellScript "init-repo" ''

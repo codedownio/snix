@@ -64,7 +64,7 @@ in
       domain = "git.snix.dev";
     };
     grafana.enable = true;
-    # Configure backups to Hetzner Cloud
+    # Configure backups
     restic = {
       enable = true;
       paths = [
