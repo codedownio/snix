@@ -5,6 +5,7 @@
 depot.nix.lazy-deps {
   age-keygen.attr = "third_party.nixpkgs.age";
   age.attr = "third_party.nixpkgs.age";
+  agenix.attr = "third_party.agenix.cli";
   colmena.attr = "third_party.nixpkgs.colmena";
   evans.attr = "third_party.nixpkgs.evans";
   treefmt.attr = "tools.treefmt";
