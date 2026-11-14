@@ -49,7 +49,7 @@ paths = [
   # The likely change is https://github.com/NixOS/nix/commit/ea95327e72f5781295417b0eae46a5e351bebebd
   "builtins/storePath/path-with-subpath",
 ]
-builtins = ["readFileType", "zipAttrsWith"]
+builtins = ["readFileType", "zipAttrsWith", "groupBy"]
 features = ["flakes", "pipe-operators", "path-interpolation"]
 
 [lix_latest]

@@ -1,0 +1,7 @@
+lang {
+  builtins "groupBy"
+}
+
+runtime-opts {
+  eval-strict
+}

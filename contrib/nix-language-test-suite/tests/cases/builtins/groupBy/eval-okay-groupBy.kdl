@@ -1,0 +1,9 @@
+lang {
+  builtins "groupBy" "substring" "hashString" "toString" "genList"
+}
+
+environment {
+  fixtures {
+    file "lib.nix" ref="../../../nixlib/lib.nix"
+  }
+}

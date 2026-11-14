@@ -1,0 +1,7 @@
+lang {
+  builtins "groupBy" "map" "tryEval" "throw"
+}
+
+runtime-opts {
+  eval-strict
+}
