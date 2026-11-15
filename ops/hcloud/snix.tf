@@ -24,10 +24,6 @@ terraform {
 
 provider "hcloud" {}
 
-resource "hcloud_ssh_key" "raito" {
-  name       = "raito"
-  public_key = file("./raito.pub")
-}
 
 # TODO: pipe it from nix ssh keys
 #
@@ -37,7 +33,7 @@ resource "hcloud_server" "meta01" {
   # Observability stacks can eat quite the amount of RAM.
   server_type = "cx32"
   location    = "fsn1"
-  ssh_keys    = [hcloud_ssh_key.raito.id]
+  ssh_keys    = []
   public_net {
     ipv4_enabled = true
     ipv6_enabled = true
@@ -71,7 +67,7 @@ resource "hcloud_server" "public01" {
   image       = "debian-12"
   server_type = "cx22"
   location    = "fsn1"
-  ssh_keys    = [hcloud_ssh_key.raito.id]
+  ssh_keys    = []
   public_net {
     ipv4_enabled = true
     ipv6_enabled = true
@@ -98,7 +94,7 @@ resource "hcloud_server" "gerrit01" {
   image       = "debian-12"
   server_type = "cpx31"
   location    = "fsn1"
-  ssh_keys    = [hcloud_ssh_key.raito.id]
+  ssh_keys    = []
   public_net {
     ipv4_enabled = true
     ipv6_enabled = true
