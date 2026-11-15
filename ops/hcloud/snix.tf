@@ -65,7 +65,7 @@ resource "hcloud_floating_ip" "mail" {
 resource "hcloud_server" "public01" {
   name        = "public01.infra.snix.dev"
   image       = "debian-12"
-  server_type = "cx22"
+  server_type = "cpx21"
   location    = "fsn1"
   ssh_keys    = []
   public_net {
@@ -92,7 +92,7 @@ resource "hcloud_rdns" "public01-v6" {
 resource "hcloud_server" "gerrit01" {
   name        = "gerrit01.infra.snix.dev"
   image       = "debian-12"
-  server_type = "cpx31"
+  server_type = "cx53"
   location    = "fsn1"
   ssh_keys    = []
   public_net {
