@@ -64,12 +64,10 @@ pub struct BuildRequest {
     /// This MUST be a clean relative path, without any ".", "..", or superfluous
     /// slashes.
     pub inputs_dir: String,
-    /// The list of output paths the build is expected to produce,
-    /// relative to the root.
-    /// If the path is not produced, the build is considered to have failed.
-    /// These MUST be clean relative paths, without any ".", "..", or superfluous
-    /// slashes, and sorted.
-    pub outputs: Vec<String>,
+    /// The list of outputs the build is expected to produce.
+    /// If not all paths are produced, the build is considered to have failed.
+    /// Must be sorted by `path` field in [Output].
+    pub outputs: Vec<Output>,
     /// The list of environment variables and their values that should be set
     /// inside the build environment.
     /// This includes both environment vars set inside the derivation, as well as
@@ -88,11 +86,6 @@ pub struct BuildRequest {
     /// build environment, but outside inputs_dir.
     /// Used for passAsFile and structuredAttrs in Nix.
     pub additional_files: Vec<AdditionalFile>,
-    /// If this is an non-empty list, all paths in `outputs` are scanned for these.
-    /// For Nix, `refscan_needles` would be populated with the nixbase32 hash parts of
-    /// every input store path and output store path. The latter is necessary to scan
-    /// for references between multi-output derivations.
-    pub refscan_needles: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +94,20 @@ pub struct EnvVar {
     pub key: String,
     pub value: Bytes,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Output {
+    /// Output path is the build sandbox the build is expected to produce.
+    /// MUST be a clean relative path, without any ".", "..", or superfluous
+    /// slashes.
+    pub path: String,
+    /// If this is a non-empty list, the path is scanned for these.
+    /// For Nix, `refscan_needles` would be normally populated with the nixbase32 hash parts of
+    /// every input store path and output store path. The latter is necessary to scan
+    /// for references between multi-output derivations.
+    pub refscan_needles: Vec<String>,
+}
+
 /// BuildConstraints represents certain conditions that must be fulfilled
 /// inside the build environment to be able to build this.
 /// Constraints can be things like required architecture and minimum amount of memory.

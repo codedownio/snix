@@ -26,7 +26,7 @@ pub enum BuildUpdate {
         /// Specifies which output is being sent, indexing into [BuildRequest::outputs].
         idx: u64,
 
-        /// Indexes into the found [BuildRequest::refscan_needles] in this output.
+        /// Indexes into the found [Output::refscan_needles] in this output.
         refscan_needles: std::collections::BTreeSet<u64>,
     },
 

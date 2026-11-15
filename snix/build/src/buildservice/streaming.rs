@@ -14,15 +14,17 @@ use tracing::{debug, warn};
 use tracing_futures::Instrument;
 
 use super::{BuildFailure, BuildUpdate};
-use crate::sandbox::{SandboxOutputs, event::SandboxEvent};
+use crate::{
+    buildservice::Output,
+    sandbox::{SandboxOutputs, event::SandboxEvent},
+};
 
 /// Executes a sandboxed build and streams its progress and outputs.
 pub(crate) fn run_build_streaming<'a, BS, DS, R, SpawnFut>(
     semaphore: &'a tokio::sync::Semaphore,
     blob_service: BS,
     directory_service: DS,
-    expected_outputs: Vec<String>,
-    refscan_needles: Vec<String>,
+    expected_outputs: Vec<Output>,
     spawn: impl FnOnce() -> SpawnFut + Send + 'a,
 ) -> BoxStream<'a, BuildUpdate>
 where
@@ -52,15 +54,13 @@ where
             Err(BuildFailure::NonzeroExitCode)?;
         }
 
-        let patterns = ReferencePattern::new(refscan_needles);
-
         let mut tasks : FuturesUnordered<_> = (expected_outputs.into_iter().enumerate().map(|(idx, o)| {
             let blob_service = &blob_service;
             let directory_service = &directory_service;
             let output_resolver = &output_resolver;
-            let scanner = ReferenceScanner::new(patterns.clone());
+            let scanner = ReferenceScanner::new(ReferencePattern::new(o.refscan_needles));
             async move {
-                let host_output_path = output_resolver.find_path(&o).await.ok_or(BuildFailure::MissingOutput{output: o})?;
+                let host_output_path = output_resolver.find_path(&o.path).await.ok_or(BuildFailure::MissingOutput{output: o.path})?;
                 ingest_host_output(idx, &host_output_path, scanner, blob_service, directory_service).await.map_err(BuildFailure::from)
             }.in_current_span()
         })).collect();

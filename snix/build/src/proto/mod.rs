@@ -120,6 +120,24 @@ where
     data.tuple_windows().all(|(a, b)| a <= b)
 }
 
+impl From<crate::buildservice::Output> for build_request::Output {
+    fn from(value: crate::buildservice::Output) -> Self {
+        Self {
+            path: value.path,
+            refscan_needles: value.refscan_needles,
+        }
+    }
+}
+
+impl From<build_request::Output> for crate::buildservice::Output {
+    fn from(value: build_request::Output) -> Self {
+        Self {
+            path: value.path,
+            refscan_needles: value.refscan_needles,
+        }
+    }
+}
+
 impl From<crate::buildservice::BuildRequest> for BuildRequest {
     fn from(value: crate::buildservice::BuildRequest) -> Self {
         let constraints = if value.constraints.is_empty() {
@@ -152,11 +170,10 @@ impl From<crate::buildservice::BuildRequest> for BuildRequest {
             working_dir: value.working_dir,
             scratch_paths: value.scratch_paths,
             inputs_dir: value.inputs_dir,
-            outputs: value.outputs,
+            outputs: value.outputs.into_iter().map(Into::into).collect(),
             environment_vars: value.environment_vars.into_iter().map(Into::into).collect(),
             constraints,
             additional_files: value.additional_files.into_iter().map(Into::into).collect(),
-            refscan_needles: value.refscan_needles,
         }
     }
 }
@@ -204,11 +221,11 @@ impl TryFrom<BuildRequest> for crate::buildservice::BuildRequest {
 
         // validate outputs
         for (i, p) in value.outputs.iter().enumerate() {
-            if !is_clean_relative_path(p) {
+            if !is_clean_relative_path(&p.path) {
                 Err(ValidateBuildRequestError::InvalidOutputPath(i))?
             }
         }
-        if !is_sorted(value.outputs.iter().map(|e| e.as_bytes())) {
+        if !is_sorted(value.outputs.iter().map(|e| e.path.as_bytes())) {
             Err(ValidateBuildRequestError::OutputsNotSorted)?;
         }
 
@@ -241,7 +258,7 @@ impl TryFrom<BuildRequest> for crate::buildservice::BuildRequest {
             working_dir: value.working_dir,
             scratch_paths: value.scratch_paths,
             inputs_dir: value.inputs_dir,
-            outputs: value.outputs,
+            outputs: value.outputs.into_iter().map(Into::into).collect(),
             environment_vars: value.environment_vars.into_iter().map(Into::into).collect(),
             constraints: value
                 .constraints
@@ -250,7 +267,6 @@ impl TryFrom<BuildRequest> for crate::buildservice::BuildRequest {
                 .unwrap_or_default(),
 
             additional_files: value.additional_files.into_iter().map(Into::into).collect(),
-            refscan_needles: value.refscan_needles,
         })
     }
 }

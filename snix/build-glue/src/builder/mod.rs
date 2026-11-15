@@ -13,7 +13,7 @@ use nix_compat::derivation::{OutputName, UnverifiedDerivation};
 use nix_compat::nixhash::Sha256;
 use nix_compat::store_path::hash_placeholder;
 use nix_compat::{derivation::Derivation, nixbase32, store_path::StorePath};
-use snix_build::buildservice::{AdditionalFile, BuildConstraints, BuildRequest, EnvVar};
+use snix_build::buildservice::{AdditionalFile, BuildConstraints, BuildRequest, EnvVar, Output};
 use snix_castore::Node;
 use snix_store::path_info::PathInfo;
 
@@ -155,20 +155,22 @@ pub(crate) fn derivation_into_build_request<D: Into<UnverifiedDerivation>>(
     }
 
     Ok(BuildRequest {
-        // Importantly, this must match the order of get_refscan_needles, since users may use that
-        // function to map back from the found needles to a store path
-        refscan_needles: derivation
-            .outputs()
-            .store_paths()
-            .map(|path| nixbase32::encode(path.digest()))
-            .chain(inputs.keys().map(|path| nixbase32::encode(path.digest())))
-            .collect(),
         command_args,
 
         outputs: derivation
             .outputs()
             .store_paths()
-            .map(|path| path.to_absolute_path()[1..].to_owned())
+            .map(|path| Output {
+                path: path.to_absolute_path()[1..].to_owned(),
+                // Importantly, this must match the order of get_refscan_needles, since users may use that
+                // function to map back from the found needles to a store path
+                refscan_needles: derivation
+                    .outputs()
+                    .store_paths()
+                    .map(|path| nixbase32::encode(path.digest()))
+                    .chain(inputs.keys().map(|path| nixbase32::encode(path.digest())))
+                    .collect(),
+            })
             .collect(),
 
         // Turn this into a sorted-by-key Vec<EnvVar>.
@@ -310,7 +312,9 @@ mod test {
     use std::collections::{BTreeMap, HashSet};
     use std::sync::LazyLock;
 
-    use snix_build::buildservice::{AdditionalFile, BuildConstraints, BuildRequest, EnvVar};
+    use snix_build::buildservice::{
+        AdditionalFile, BuildConstraints, BuildRequest, EnvVar, Output,
+    };
 
     use crate::builder::NIX_ENVIRONMENT_VARS;
     use crate::known_paths::KnownPaths;
@@ -374,7 +378,13 @@ mod test {
         assert_eq!(
             BuildRequest {
                 command_args: vec![":".into()],
-                outputs: vec!["nix/store/fhaj6gmwns62s6ypkcldbaj2ybvkhx3p-foo".into()],
+                outputs: vec![Output {
+                    path: "nix/store/fhaj6gmwns62s6ypkcldbaj2ybvkhx3p-foo".into(),
+                    refscan_needles: vec![
+                        "fhaj6gmwns62s6ypkcldbaj2ybvkhx3p".into(),
+                        "mp57d33657rf34lzvlbpfa1gjfv5gmpg".into()
+                    ],
+                }],
                 environment_vars: Vec::from_iter(expected_environment_vars.into_iter().map(
                     |(k, v)| EnvVar {
                         key: k.into(),
@@ -393,10 +403,6 @@ mod test {
                 additional_files: vec![],
                 working_dir: "build".into(),
                 scratch_paths: vec!["build".into(), "nix/store".into()],
-                refscan_needles: vec![
-                    "fhaj6gmwns62s6ypkcldbaj2ybvkhx3p".into(),
-                    "mp57d33657rf34lzvlbpfa1gjfv5gmpg".into()
-                ],
             },
             build_request
         );
@@ -439,7 +445,10 @@ mod test {
                 // Non existent output placeholders should not get replaced.
                 hash_placeholder("non-existent"),
             ],
-            outputs: vec!["nix/store/dgapb8kh5gis4w7hzfl5725sx5gam0nz-with-placeholders".into()],
+            outputs: vec![Output {
+                path: "nix/store/dgapb8kh5gis4w7hzfl5725sx5gam0nz-with-placeholders".into(),
+                refscan_needles: vec!["dgapb8kh5gis4w7hzfl5725sx5gam0nz".into()],
+            }],
             environment_vars: Vec::from_iter(expected_environment_vars.into_iter().map(
                 |(k, v)| EnvVar {
                     key: k.into(),
@@ -455,7 +464,6 @@ mod test {
             additional_files: vec![],
             working_dir: "build".into(),
             scratch_paths: vec!["build".into(), "nix/store".into()],
-            refscan_needles: vec!["dgapb8kh5gis4w7hzfl5725sx5gam0nz".into()],
         };
 
         assert_eq!(
@@ -488,7 +496,10 @@ mod test {
 
         let exp_build_request = BuildRequest {
             command_args: vec![":".to_string()],
-            outputs: vec!["nix/store/4q0pg5zpfmznxscq3avycvf9xdvx50n3-bar".into()],
+            outputs: vec![Output {
+                path: "nix/store/4q0pg5zpfmznxscq3avycvf9xdvx50n3-bar".into(),
+                refscan_needles: vec!["4q0pg5zpfmznxscq3avycvf9xdvx50n3".into()],
+            }],
             environment_vars: Vec::from_iter(expected_environment_vars.into_iter().map(
                 |(k, v)| EnvVar {
                     key: k.into(),
@@ -506,7 +517,6 @@ mod test {
             additional_files: vec![],
             working_dir: "build".into(),
             scratch_paths: vec!["build".into(), "nix/store".into()],
-            refscan_needles: vec!["4q0pg5zpfmznxscq3avycvf9xdvx50n3".into()],
         };
 
         assert_eq!(
@@ -544,7 +554,10 @@ mod test {
 
         let exp_build_request = BuildRequest {
             command_args: vec![":".to_string()],
-            outputs: vec!["nix/store/pp17lwra2jkx8rha15qabg2q3wij72lj-foo".into()],
+            outputs: vec![Output {
+                path: "nix/store/pp17lwra2jkx8rha15qabg2q3wij72lj-foo".into(),
+                refscan_needles: vec!["pp17lwra2jkx8rha15qabg2q3wij72lj".into()],
+            }],
             environment_vars: Vec::from_iter(expected_environment_vars.into_iter().map(
                 |(k, v)| EnvVar {
                     key: k.into(),
@@ -571,7 +584,6 @@ mod test {
             ],
             working_dir: "build".into(),
             scratch_paths: vec!["build".into(), "nix/store".into()],
-            refscan_needles: vec!["pp17lwra2jkx8rha15qabg2q3wij72lj".into()],
         };
 
         assert_eq!(
@@ -618,7 +630,10 @@ mod test {
                     "-xc".to_string(),
                     r#"source ${NIX_ATTRS_SH_FILE:-/dev/null}; cat ${NIX_ATTRS_JSON_FILE:-/dev/null}; out=${out:-${outputs[out]}}; cat ${NIX_ATTRS_JSON_FILE:-/dev/null} >$out; exit 0"#.to_string()
                 ],
-                outputs: vec!["nix/store/knq92bscsfi5xzvhf8icj2kbwddkk5m4-script.sh".into()],
+                outputs: vec![Output {
+                    path: "nix/store/knq92bscsfi5xzvhf8icj2kbwddkk5m4-script.sh".into(),
+                    refscan_needles: vec!["knq92bscsfi5xzvhf8icj2kbwddkk5m4".into()],
+                }],
                 environment_vars: Vec::from_iter(expected_environment_vars.into_iter().map(
                     |(k, v)| EnvVar {
                         key: k.into(),
@@ -652,7 +667,6 @@ declare system='x86_64-linux'
                 ],
                 working_dir: "build".into(),
                 scratch_paths: vec!["build".into(), "nix/store".into()],
-                refscan_needles: vec!["knq92bscsfi5xzvhf8icj2kbwddkk5m4".into()],
             };
 
         assert_eq!(

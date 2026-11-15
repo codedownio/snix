@@ -103,7 +103,6 @@ where
         span.record("build.name", build_name.to_string());
 
         let outputs = request.outputs.clone();
-        let needles = request.refscan_needles.clone();
 
         let spec = self.make_spec(request, &sandbox_path);
 
@@ -112,7 +111,6 @@ where
             self.blob_engine.clone(),
             self.directory_service.clone(),
             outputs,
-            needles,
             move || async move {
                 info!("Starting bwrap build");
 

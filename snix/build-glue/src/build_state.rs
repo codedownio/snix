@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::{collections::BTreeMap, io, sync::Arc};
 
 use futures::{StreamExt, TryStreamExt as _};
 use nix_compat::{
@@ -184,26 +184,30 @@ impl BuildState {
                 // synthesize the build request.
                 let build_request = builder::derivation_into_build_request(drv, &resolved_inputs)?;
 
-                // Assemble a mapping table from needle back to store path, as well as a list of all outputs.
-                // The latter is a subset of the former.
+                // Assemble a list of all outputs, as well as a mapping table from output path to
+                // possible reference paths.
                 // We need this to understand the response later.
-                let mut output_paths: Vec<StorePath> =
-                    Vec::with_capacity(build_request.outputs.len());
-                let all_possible_refs: Vec<StorePath> = build_request
+                let output_paths: Vec<StorePath> = build_request
                     .outputs
                     .iter()
-                    .map(|p| {
-                        let sp = StorePath::from_bytes(
-                            p.strip_prefix(&nix_compat::store_path::STORE_DIR_WITH_SLASH[1..])
+                    .map(|o| {
+                        StorePath::from_bytes(
+                            o.path
+                                .strip_prefix(&nix_compat::store_path::STORE_DIR_WITH_SLASH[1..])
                                 .expect("output doesn't have expected store_dir prefix")
                                 .as_bytes(),
                         )
-                        .expect("Snix bug: cannot parse output as StorePath");
-                        output_paths.push(sp.clone());
-
-                        sp
+                        .expect("Snix bug: cannot parse output as StorePath")
                     })
-                    .chain(resolved_inputs.keys().cloned())
+                    .collect();
+                let refs_per_path: BTreeMap<&StorePath, Vec<&StorePath>> = output_paths
+                    .iter()
+                    .map(|o| {
+                        (
+                            o,
+                            output_paths.iter().chain(resolved_inputs.keys()).collect(),
+                        )
+                    })
                     .collect();
 
                 span.pb_set_message(&format!("🔨Building {}", store_path));
@@ -227,16 +231,15 @@ impl BuildState {
                                 idx,
                                 refscan_needles,
                             } => {
-                                let output_path = if idx >= output_paths.len() as u64 {
-                                    return Err(std::io::Error::other("invalid idx"))?;
-                                } else {
-                                    output_paths[idx as usize].as_ref()
-                                };
+                                let output_path = usize::try_from(idx)
+                                    .ok()
+                                    .and_then(|i| output_paths.get(i))
+                                    .ok_or_else(|| std::io::Error::other("invalid idx"))?;
 
                                 // ensure we only receive each ProducedOutput once.
                                 if produced_outputs
                                     .iter()
-                                    .any(|e| e.output_path == output_path)
+                                    .any(|e| e.output_path == output_path.as_ref())
                                 {
                                     return Err(std::io::Error::other(
                                         "received output multiple times",
@@ -244,19 +247,22 @@ impl BuildState {
                                 }
 
                                 produced_outputs.push(ProducedOutput {
-                                    output_path,
                                     node,
+                                    output_path: output_path.as_ref(),
                                     references: {
                                         let mut references =
                                             Vec::with_capacity(refscan_needles.len());
 
                                         // Map each output needle index back into a store path.
                                         for needle_idx in refscan_needles {
-                                            let output = all_possible_refs
+                                            let output = *refs_per_path
+                                                .get(output_path)
+                                                .ok_or(std::io::Error::other("invalid output"))?
                                                 .get(needle_idx as usize)
-                                                .ok_or(std::io::Error::other("invalid needle_idx"))?
-                                                .clone();
-                                            references.push(output);
+                                                .ok_or(std::io::Error::other(
+                                                    "invalid needle_idx",
+                                                ))?;
+                                            references.push(output.to_owned());
                                         }
 
                                         // Produce references sorted by name for consistency with nix narinfos

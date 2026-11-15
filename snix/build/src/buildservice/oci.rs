@@ -128,7 +128,6 @@ where
             self.blob_engine.clone(),
             self.directory_service.clone(),
             request.outputs.clone(),
-            request.refscan_needles.clone(),
             move || async move {
                 self.spawn_bundle_process(&request, &bundle_path, &build_name.to_string())
                     .await
