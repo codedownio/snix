@@ -67,6 +67,7 @@ in
   "metrics-push-htpasswd.age" = meta01Default;
   "alertmanager-irc-relay-environment.age" = meta01Default;
   "irccat-secrets.age" = meta01Default;
+  "loki-environment.age" = meta01Default;
   "mimir-environment.age" = meta01Default;
   "mimir-webhook-url.age" = meta01Default;
 

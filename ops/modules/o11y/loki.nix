@@ -8,7 +8,7 @@ let
   inherit (lib) mkEnableOption mkIf;
 in
 {
-  options.services.depot.loki.enable = mkEnableOption "Loki storage";
+  options.services.depot.loki.enable = mkEnableOption "Loki";
 
   config = mkIf cfg.enable {
     services.loki = {
@@ -29,8 +29,8 @@ in
 
         common = {
           storage.s3 = {
-            endpoint = "fsn1.your-objectstorage.com";
-            region = "fsn1";
+            endpoint = "garage3.cyberchaos.dev";
+            region = "garage";
             bucketnames = "snix-loki";
             secret_access_key = "\${S3_KEY}"; # This is a secret injected via an environment variable
             access_key_id = "\${S3_KEY_ID}";
