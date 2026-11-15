@@ -44,12 +44,6 @@ resource "minio_s3_bucket" "mimir" {
   object_locking = false
 }
 
-resource "minio_s3_bucket" "loki" {
-  bucket         = "snix-loki"
-  acl            = "private"
-  object_locking = false
-}
-
 resource "minio_s3_bucket" "tempo" {
   bucket         = "snix-tempo"
   acl            = "private"
