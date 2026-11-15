@@ -55,9 +55,3 @@ resource "minio_s3_bucket" "tempo" {
   acl            = "private"
   object_locking = false
 }
-
-resource "minio_s3_bucket" "backups" {
-  bucket         = "snix-backups"
-  acl            = "private"
-  object_locking = false
-}
