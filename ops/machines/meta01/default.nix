@@ -100,8 +100,7 @@ in
     {
       loki-environment.file = secretFile "loki-environment";
       mimir-environment.file = secretFile "mimir-environment";
-      # Yes, they are literally the same: Hetzner Cloud has no support for per-bucket keys.
-      tempo-environment.file = secretFile "mimir-environment";
+      tempo-environment.file = secretFile "tempo-environment";
       metrics-push-htpasswd.file = secretFile "metrics-push-htpasswd";
       metrics-push-htpasswd.owner = "nginx";
       mimir-webhook-url.file = secretFile "mimir-webhook-url";

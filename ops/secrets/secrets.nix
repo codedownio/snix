@@ -70,6 +70,7 @@ in
   "loki-environment.age" = meta01Default;
   "mimir-environment.age" = meta01Default;
   "mimir-webhook-url.age" = meta01Default;
+  "tempo-environment.age" = meta01Default;
 
   "tf-dns.age" = terraform;
   "tf-keycloak.age" = terraform;

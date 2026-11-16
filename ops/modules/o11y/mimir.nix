@@ -37,7 +37,7 @@ in
         common.storage = {
           backend = "s3";
           s3 = {
-            endpoint = "fsn1.your-objectstorage.com";
+            endpoint = "garage3.cyberchaos.dev";
             bucket_name = "snix-mimir";
             secret_access_key = "\${S3_KEY}"; # This is a secret injected via an environment variable
             access_key_id = "\${S3_KEY_ID}";
