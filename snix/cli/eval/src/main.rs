@@ -75,6 +75,17 @@ fn print_phase_stats(started: std::time::Instant) {
     );
 }
 
+/// Extract the store-path string from an eval result line like `=> "/nix/store/…-hello" :: string`.
+/// Returns None if the result isn't a store path (so a plain value skips closure materialization).
+fn output_store_path(output: &str) -> Option<&str> {
+    output.lines().rev().find_map(|l| {
+        l.trim()
+            .strip_prefix("=> \"")
+            .and_then(|r| r.split('"').next())
+            .filter(|p| p.starts_with("/nix/store/"))
+    })
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let t_main = std::time::Instant::now();
     let args = Args::parse();
@@ -106,9 +117,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(file) = &args.script {
         run_file(&mut stdout, &mut stderr, io_handle, file.clone(), &args)
     } else if let Some(expr) = &args.expr {
-        let success = interpret(
+        let result = interpret(
             &mut stderr,
-            io_handle,
+            io_handle.clone(),
             expr,
             None,
             &args,
@@ -118,8 +129,21 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             None,
             None,
         )
-        .unwrap()
-        .finalize(&mut stdout);
+        .unwrap();
+        // With --materialize-closure, once the evaluation has realised a store path, pull that
+        // path's whole runtime closure into the store before reporting success. full-snix reads
+        // build inputs lazily via a FUSE mount, so a runtime-closure member the build never opened
+        // isn't in the store otherwise — leaving a consumer's closure query incomplete and the mount
+        // unable to serve it. Off by default (see Args); non-store-path results skip it.
+        if args.materialize_closure
+            && result.success()
+            && let Some(sp) = output_store_path(result.output())
+            && let Err(e) = io_handle.materialize_closure(sp)
+        {
+            writeln!(stderr, "error: {e}").unwrap();
+            std::process::exit(1);
+        }
+        let success = result.finalize(&mut stdout);
         print_phase_stats(t_main);
         if !success {
             std::process::exit(1);

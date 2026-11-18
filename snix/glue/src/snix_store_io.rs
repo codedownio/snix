@@ -72,6 +72,64 @@ impl SnixStoreIO {
         }
     }
 
+    /// Pull a store path's entire runtime closure into the store.
+    ///
+    /// full-snix builds read their inputs lazily through a FUSE mount, so only the paths a build
+    /// actually opened get materialized into the (near) store as a side effect. A runtime-closure
+    /// member the build never touched is therefore absent — no PathInfo and no castore content —
+    /// which leaves a consumer's transitive closure query (nox's `GetClosure`) incomplete and the
+    /// mount unable to serve it. CppNix avoids this by eagerly copying the whole input closure to
+    /// disk before building; the lazy FUSE model trades that away, so we restore the invariant here.
+    ///
+    /// Walk the closure via the pathinfo service: each `get` write-backs the PathInfo and (for a
+    /// substituted path) ingests its castore content, so afterwards the whole runtime closure is
+    /// present — matching classic (`snix-store copy --recursive`) and hybrid. Already-present paths
+    /// are cheap `near` hits; only the untouched tail is fetched. Errors if a member can't be
+    /// resolved from the store or the substituter (an output whose closure can't be completed is
+    /// unusable, so failing fast here beats a later ENOENT through the mount).
+    pub fn materialize_closure(&self, root_path: &str) -> io::Result<()> {
+        let root = nix_compat::store_path::StorePath::from_absolute_path(root_path.as_bytes())
+            .map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("not a store path: {root_path}: {e}"),
+                )
+            })?;
+        self.tokio_handle.block_on(async {
+            let pis = self.build_state.path_info_service.as_ref();
+            let mut visited: std::collections::HashSet<[u8; 20]> = std::collections::HashSet::new();
+            let mut queue: Vec<[u8; 20]> = vec![*root.digest()];
+            let mut count: usize = 0;
+            while let Some(digest) = queue.pop() {
+                if !visited.insert(digest) {
+                    continue;
+                }
+                match pis.get(digest).await.map_err(io::Error::other)? {
+                    Some(path_info) => {
+                        for r in &path_info.references {
+                            if !visited.contains(r.digest()) {
+                                queue.push(*r.digest());
+                            }
+                        }
+                        count += 1;
+                    }
+                    None => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotFound,
+                            format!(
+                                "runtime closure of {} is incomplete: {} not resolvable from store or substituter",
+                                root.to_absolute_path(),
+                                nix_compat::nixbase32::encode(&digest),
+                            ),
+                        ));
+                    }
+                }
+            }
+            tracing::debug!(paths = count, "materialized output runtime closure into store");
+            Ok(())
+        })
+    }
+
     /// for a given [StorePath] and additional [snix_castore::Path] inside the store path,
     /// look up the [PathInfo], and if it exists, and then uses
     /// [descend_to] to return the [Node] specified by `sub_path`.

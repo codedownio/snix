@@ -73,6 +73,13 @@ pub struct Args {
     #[clap(long)]
     pub no_warnings: bool,
 
+    /// After the evaluation realises a store path, pull that path's entire runtime closure into the
+    /// store (fetching/substituting any members not already present). Off by default. nox's
+    /// full-snix mode sets this: its builds read inputs lazily through a FUSE mount, so a
+    /// runtime-closure member the build never touched is otherwise left out of the store.
+    #[clap(long)]
+    pub materialize_closure: bool,
+
     /// Additional entries to the Nix expression search path, a colon-separated list of directories
     /// used to resolve `<...>`-style lookup paths.
     ///
