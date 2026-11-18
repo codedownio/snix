@@ -224,11 +224,11 @@ pub enum Error {
 
     #[error("unable to join URL {0} with {1}")]
     JoinUrl(Url, String, url::ParseError),
-    #[error("reqwest error")]
+    #[error("reqwest error: {0}")]
     Reqwest(#[from] reqwest_middleware::Error),
-    #[error("unable to decode NARInfo response as string")]
+    #[error("unable to decode NARInfo response as string: {0}")]
     DecodeBody(reqwest::Error),
-    #[error("unable to parse NARInfo")]
+    #[error("unable to parse NARInfo: {0}")]
     ParseNARInfo(nix_compat::narinfo::Error),
     #[error("no valid signature found")]
     NoValidSignature,
@@ -236,7 +236,7 @@ pub enum Error {
     FailedToRequestNAR(reqwest::StatusCode),
     #[error("unsupported NAR compression: {0}")]
     UnsupportedNARCompression(String),
-    #[error("failed to ingest NAR")]
+    #[error("failed to ingest NAR: {0}")]
     IngestNAR(NarIngestionError),
     #[error("NARSize mismatch, narinfo size {narinfo_size}, actual size {actual_size}")]
     NARSizeMismatch { narinfo_size: u64, actual_size: u64 },
